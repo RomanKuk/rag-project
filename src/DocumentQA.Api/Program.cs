@@ -39,7 +39,7 @@ builder.Services.AddOpenAIEmbeddingGenerator(
 builder.Services.AddSingleton(_ =>
 {
     var host = builder.Configuration["Qdrant:Host"] ?? "localhost";
-    var port = int.Parse(builder.Configuration["Qdrant:Port"] ?? "6333");
+    var port = int.Parse(builder.Configuration["Qdrant:Port"] ?? "6334");
     return new QdrantClient(host, port);
 });
 
