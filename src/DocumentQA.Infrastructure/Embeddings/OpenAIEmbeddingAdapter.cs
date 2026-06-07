@@ -1,23 +1,27 @@
 using DocumentQA.Application.Abstractions.Retrieval;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel.Embeddings;
 
 namespace DocumentQA.Infrastructure.Embeddings;
 
 public sealed class OpenAIEmbeddingAdapter : IEmbeddingPort
 {
-    private readonly ITextEmbeddingGenerationService _sk;
+    private readonly IEmbeddingGenerator<string, Embedding<float>> _generator;
 
     public OpenAIEmbeddingAdapter(
-        [FromKeyedServices("embeddings")] ITextEmbeddingGenerationService sk)
-        => _sk = sk;
+        [FromKeyedServices("embeddings")] IEmbeddingGenerator<string, Embedding<float>> generator)
+        => _generator = generator;
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
-        => (await _sk.GenerateEmbeddingAsync(text, cancellationToken: ct)).ToArray();
+    {
+        var results = await _generator.GenerateAsync([text], cancellationToken: ct);
+        return results[0].Vector.ToArray();
+    }
 
     public async Task<IReadOnlyList<float[]>> EmbedBatchAsync(
         IReadOnlyList<string> texts, CancellationToken ct)
-        => (await _sk.GenerateEmbeddingsAsync(texts.ToList(), cancellationToken: ct))
-            .Select(e => e.ToArray())
-            .ToList();
+    {
+        var results = await _generator.GenerateAsync(texts, cancellationToken: ct);
+        return results.Select(e => e.Vector.ToArray()).ToList();
+    }
 }

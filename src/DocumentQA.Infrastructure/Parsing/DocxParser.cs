@@ -16,8 +16,8 @@ public sealed class DocxParser : IDocumentParser
         [EnumeratorCancellation] CancellationToken ct)
     {
         using var doc = WordprocessingDocument.Open(stream, false);
-        var body = doc.MainDocumentPart!.Document.Body!;
-        yield return new ParsedPage(1, body.InnerText);
+        var text = doc.MainDocumentPart?.Document?.Body?.InnerText ?? string.Empty;
+        yield return new ParsedPage(1, text);
         await Task.CompletedTask;
     }
 }

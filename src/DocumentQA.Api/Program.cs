@@ -30,7 +30,7 @@ builder.Services.AddOpenAIChatCompletion(
     apiKey: builder.Configuration["OpenAI:ApiKey"]!,
     serviceId: "chat");
 
-builder.Services.AddOpenAITextEmbeddingGeneration(
+builder.Services.AddOpenAIEmbeddingGenerator(
     modelId: "text-embedding-3-small",
     apiKey: builder.Configuration["OpenAI:ApiKey"]!,
     serviceId: "embeddings");
