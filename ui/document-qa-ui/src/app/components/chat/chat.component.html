@@ -1,0 +1,46 @@
+<div class="chat-container">
+  <div class="messages" #scrollContainer>
+    @if (messages().length === 0) {
+      <div class="empty-state">
+        <p>Upload a document above, then ask a question.</p>
+      </div>
+    }
+
+    @for (msg of messages(); track $index) {
+      <div class="message" [class]="msg.role">
+        <div class="bubble">
+          <div class="content">
+            {{ msg.content }}
+            @if (msg.isStreaming) {
+              <span class="cursor">▋</span>
+            }
+          </div>
+          @if (msg.sources && msg.sources.length > 0) {
+            <div class="sources">
+              <span class="sources-label">Sources:</span>
+              @for (src of msg.sources; track src.documentName + src.page) {
+                <span class="source-tag">{{ src.documentName }} p.{{ src.page }}</span>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="input-area">
+    <textarea
+      [value]="question()"
+      (input)="question.set($any($event.target).value)"
+      (keydown)="onKeyDown($event)"
+      placeholder="Ask a question about your documents..."
+      rows="2"
+      [disabled]="isLoading()">
+    </textarea>
+    <button
+      (click)="sendMessage()"
+      [disabled]="isLoading() || !question().trim()">
+      {{ isLoading() ? '...' : 'Send' }}
+    </button>
+  </div>
+</div>

@@ -1,0 +1,20 @@
+[
+  {
+    "question": "What is the maximum file size allowed for uploads?",
+    "expected_answer": "The maximum file size is 50MB per document.",
+    "source_document": "technical-spec.pdf",
+    "source_page": 3
+  },
+  {
+    "question": "Who is responsible for data processing under GDPR?",
+    "expected_answer": "The Data Controller is responsible for data processing under GDPR.",
+    "source_document": "privacy-policy.pdf",
+    "source_page": 1
+  },
+  {
+    "question": "What vector database is used for storing embeddings?",
+    "expected_answer": "Qdrant is used as the vector database for storing embeddings in the local development environment.",
+    "source_document": "architecture.pdf",
+    "source_page": 2
+  }
+]

@@ -1,0 +1,35 @@
+.upload-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-btn {
+  display: inline-block;
+  padding: 6px 16px;
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+  white-space: nowrap;
+
+  &:hover:not(.uploading) {
+    background: rgba(255,255,255,0.25);
+  }
+
+  &.uploading {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.upload-message {
+  font-size: 0.8rem;
+
+  &.success { color: #a5d6a7; }
+  &.error   { color: #ef9a9a; }
+  &.uploading { color: #fff176; }
+}

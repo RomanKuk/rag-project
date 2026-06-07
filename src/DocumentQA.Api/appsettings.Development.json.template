@@ -1,0 +1,9 @@
+{
+  "OpenAI": {
+    "ApiKey": "sk-YOUR_OPENAI_API_KEY_HERE"
+  },
+  "Qdrant": {
+    "Host": "localhost",
+    "Port": 6333
+  }
+}

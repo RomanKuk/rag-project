@@ -1,0 +1,12 @@
+# Development-only: starts Qdrant so you can run `dotnet run` and `ng serve` locally.
+# Usage: docker compose -f docker-compose.dev.yml up -d
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:

@@ -1,0 +1,37 @@
+<div class="app-layout">
+  <header class="app-header">
+    <h1>Document Q&A Assistant</h1>
+    <app-document-upload />
+  </header>
+  <main class="app-main">
+    <router-outlet />
+  </main>
+</div>
+
+<style>
+  .app-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  .app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: #1a1a2e;
+    color: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+
+  .app-header h1 {
+    font-size: 1.2rem;
+    font-weight: 600;
+  }
+
+  .app-main {
+    flex: 1;
+    overflow: hidden;
+  }
+</style>

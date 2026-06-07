@@ -1,0 +1,19 @@
+<div class="upload-area">
+  <label class="upload-btn" [class.uploading]="state() === 'uploading'">
+    @if (state() === 'uploading') {
+      Uploading...
+    } @else {
+      Upload Document
+    }
+    <input
+      type="file"
+      accept=".pdf,.docx,.txt"
+      (change)="onFileSelected($event)"
+      [disabled]="state() === 'uploading'"
+      hidden>
+  </label>
+
+  @if (message()) {
+    <span class="upload-message" [class]="state()">{{ message() }}</span>
+  }
+</div>

@@ -1,0 +1,44 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.swp
+*.cache
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets
+
+# Secrets — never commit real API keys
+appsettings.Development.json
+appsettings.*.local.json
+.env
+.env.*
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+*.js.map
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.code-workspace
+
+# Docker volumes
+qdrant_storage/
