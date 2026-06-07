@@ -1,101 +1,80 @@
-using System.Text.Json;
-using DocumentQA.Core.Interfaces;
-using DocumentQA.Core.Models;
-using DocumentQA.Ingestion;
-using DocumentQA.Ingestion.Parsers;
-using DocumentQA.Api.Services;
+using DocumentQA.Api.Endpoints;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
-using Microsoft.SemanticKernel.Connectors.Qdrant;
-using Microsoft.SemanticKernel.Memory;
+using DocumentQA.Application.Abstractions.Generation;
+using DocumentQA.Application.Abstractions.Ingestion;
+using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Options;
+using DocumentQA.Application.UseCases.AskQuestion;
+using DocumentQA.Application.UseCases.IngestDocument;
+using DocumentQA.Infrastructure.Chunking;
+using DocumentQA.Infrastructure.Embeddings;
+using DocumentQA.Infrastructure.Generation;
+using DocumentQA.Infrastructure.Parsing;
+using DocumentQA.Infrastructure.Retrieval;
+using DocumentQA.Infrastructure.VectorStores;
+using OpenTelemetry.Trace;
+using Qdrant.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// CORS — allow Angular dev server
-builder.Services.AddCors(options =>
+// Options
+builder.Services.Configure<RagOptions>(builder.Configuration.GetSection("Rag"));
+
+// CORS for Angular
+builder.Services.AddCors(o => o.AddPolicy("Angular", p =>
+    p.WithOrigins("http://localhost:4200").AllowAnyHeader().AllowAnyMethod()));
+
+// Semantic Kernel — registered with serviceId so adapters resolve via [FromKeyedServices]
+builder.Services.AddOpenAIChatCompletion(
+    modelId: "gpt-4o",
+    apiKey: builder.Configuration["OpenAI:ApiKey"]!,
+    serviceId: "chat");
+
+builder.Services.AddOpenAITextEmbeddingGeneration(
+    modelId: "text-embedding-3-small",
+    apiKey: builder.Configuration["OpenAI:ApiKey"]!,
+    serviceId: "embeddings");
+
+// Qdrant client
+builder.Services.AddSingleton(_ =>
 {
-    options.AddPolicy("Angular", policy => policy
-        .WithOrigins("http://localhost:4200")
-        .AllowAnyHeader()
-        .AllowAnyMethod());
+    var host = builder.Configuration["Qdrant:Host"] ?? "localhost";
+    var port = int.Parse(builder.Configuration["Qdrant:Port"] ?? "6333");
+    return new QdrantClient(host, port);
 });
 
-// Semantic Kernel
-builder.Services.AddSingleton(sp =>
-{
-    return Kernel.CreateBuilder()
-        .AddOpenAIChatCompletion(
-            modelId: "gpt-4o",
-            apiKey: builder.Configuration["OpenAI:ApiKey"]!)
-        .Build();
-});
+// Ingestion adapters
+builder.Services.AddScoped<IDocumentParser, PdfParser>();
+builder.Services.AddScoped<IDocumentParser, DocxParser>();
+builder.Services.AddScoped<IDocumentParser, TxtParser>();
+builder.Services.AddScoped<IChunkingStrategy, SlidingWindowChunker>();
 
-// Vector memory (Qdrant-backed)
-builder.Services.AddSingleton<ISemanticTextMemory>(sp =>
-{
-    var cfg = builder.Configuration;
-    var host = cfg["Qdrant:Host"] ?? "localhost";
-    var port = int.Parse(cfg["Qdrant:Port"] ?? "6333");
+// Retrieval adapters
+builder.Services.AddScoped<IEmbeddingPort, OpenAIEmbeddingAdapter>();
+builder.Services.AddScoped<IVectorStore, QdrantVectorStore>();
+builder.Services.AddScoped<IQueryProcessor, PassThroughQueryProcessor>();
+builder.Services.AddScoped<IReranker, IdentityReranker>();
 
-    var store = new QdrantMemoryStore(host, port, vectorSize: 1536);
-    var embeddingGen = new OpenAITextEmbeddingGenerationService(
-        "text-embedding-3-small",
-        cfg["OpenAI:ApiKey"]!);
+// Generation adapters
+builder.Services.AddScoped<IPromptBuilder, TemplatePromptBuilder>();
+builder.Services.AddScoped<IChatCompletionPort, OpenAIChatAdapter>();
+builder.Services.AddScoped<IAnswerGuardrail, CitationPresenceGuardrail>();
 
-    return new SemanticTextMemory(store, embeddingGen);
-});
+// Use cases
+builder.Services.AddScoped<AskQuestionHandler>();
+builder.Services.AddScoped<IngestDocumentHandler>();
 
-// Ingestion
-builder.Services.AddSingleton<SlidingWindowChunker>();
-builder.Services.AddSingleton<IDocumentParser, PdfParser>();
-builder.Services.AddSingleton<IDocumentParser, DocxParser>();
-builder.Services.AddSingleton<IDocumentParser, TxtParser>();
-builder.Services.AddSingleton<IngestionService>();
-
-// RAG
-builder.Services.AddSingleton<RagService>();
+// Observability
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t
+        .AddSource("DocumentQA.Rag")
+        .AddAspNetCoreInstrumentation());
 
 var app = builder.Build();
 
 app.UseCors("Angular");
-
-// Upload endpoint
-app.MapPost("/api/documents/upload", async (
-    IFormFile file,
-    IngestionService ingestionService) =>
-{
-    if (file.Length == 0)
-        return Results.BadRequest(new { error = "File is empty." });
-
-    using var stream = file.OpenReadStream();
-    await ingestionService.IngestAsync(stream, file.FileName);
-
-    return Results.Ok(new { message = "Document ingested", fileName = file.FileName });
-}).DisableAntiforgery();
-
-// Chat endpoint — SSE streaming
-app.MapPost("/api/chat", async (
-    ChatRequest request,
-    RagService ragService,
-    HttpContext httpContext,
-    CancellationToken ct) =>
-{
-    httpContext.Response.ContentType = "text/event-stream";
-    httpContext.Response.Headers.CacheControl = "no-cache";
-    httpContext.Response.Headers.Connection = "keep-alive";
-
-    await foreach (var token in ragService.AskAsync(request.Question, ct))
-    {
-        var json = JsonSerializer.Serialize(new { token });
-        await httpContext.Response.WriteAsync($"data: {json}\n\n", ct);
-        await httpContext.Response.Body.FlushAsync(ct);
-    }
-
-    await httpContext.Response.WriteAsync("data: [DONE]\n\n", ct);
-    await httpContext.Response.Body.FlushAsync(ct);
-});
-
-// Health check
+app.MapDocumentsEndpoints();
+app.MapChatEndpoints();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.Run();

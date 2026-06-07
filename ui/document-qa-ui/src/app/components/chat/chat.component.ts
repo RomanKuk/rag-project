@@ -46,15 +46,32 @@ export class ChatComponent {
     ]);
 
     try {
-      for await (const token of this.chatService.streamAnswer(q)) {
-        this.messages.update(msgs => {
-          const updated = [...msgs];
-          updated[assistantIndex] = {
-            ...updated[assistantIndex],
-            content: updated[assistantIndex].content + token
-          };
-          return updated;
-        });
+      for await (const event of this.chatService.streamAnswer(q)) {
+        if (event.type === 'sources' && event.sources) {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[assistantIndex] = { ...updated[assistantIndex], sources: event.sources! };
+            return updated;
+          });
+        } else if (event.type === 'token' && event.token) {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[assistantIndex] = {
+              ...updated[assistantIndex],
+              content: updated[assistantIndex].content + event.token
+            };
+            return updated;
+          });
+        } else if (event.type === 'no_context') {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[assistantIndex] = {
+              ...updated[assistantIndex],
+              content: 'No relevant documents found to answer your question.'
+            };
+            return updated;
+          });
+        }
       }
     } catch (err) {
       this.messages.update(msgs => {

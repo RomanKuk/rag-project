@@ -1,12 +1,25 @@
 import { Injectable } from '@angular/core';
 import { environment } from '../../environments/environment';
+import { SourceReference } from '../models/chat.models';
+
+interface ServerChunk {
+  type: 'token' | 'sources' | 'no_context';
+  token?: string;
+  sources?: SourceReference[];
+}
+
+export interface StreamEvent {
+  type: 'token' | 'sources' | 'no_context';
+  token?: string;
+  sources?: SourceReference[];
+}
 
 @Injectable({ providedIn: 'root' })
 export class ChatService {
   private readonly apiUrl = environment.apiUrl;
 
   // fetch + ReadableStream for POST-based SSE (EventSource only supports GET)
-  async *streamAnswer(question: string): AsyncGenerator<string> {
+  async *streamAnswer(question: string): AsyncGenerator<StreamEvent> {
     const response = await fetch(`${this.apiUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -34,8 +47,8 @@ export class ChatService {
         if (data === '[DONE]') return;
 
         try {
-          const parsed = JSON.parse(data);
-          if (parsed.token) yield parsed.token as string;
+          const chunk = JSON.parse(data) as ServerChunk;
+          yield chunk;
         } catch {
           // skip malformed chunk
         }
