@@ -1,20 +1,74 @@
 [
   {
-    "question": "What is the maximum file size allowed for uploads?",
-    "expected_answer": "The maximum file size is 50MB per document.",
-    "source_document": "technical-spec.pdf",
-    "source_page": 3
-  },
-  {
-    "question": "Who is responsible for data processing under GDPR?",
-    "expected_answer": "The Data Controller is responsible for data processing under GDPR.",
-    "source_document": "privacy-policy.pdf",
+    "question": "What are the three curated document sets recommended for teaching RAG systems?",
+    "expected_answer": "Kaggle Sample RAG Knowledge Item Dataset, Hugging Face Advanced RAG Cookbook, and Microsoft Learn RAG Preparation Guide.",
+    "source_document": "rag-guide.md",
     "source_page": 1
   },
   {
-    "question": "What vector database is used for storing embeddings?",
-    "expected_answer": "Qdrant is used as the vector database for storing embeddings in the local development environment.",
-    "source_document": "architecture.pdf",
-    "source_page": 2
+    "question": "What three key metrics does the Ragas framework measure for RAG evaluation?",
+    "expected_answer": "Faithfulness (groundedness), Answer Relevancy (whether the answer addresses the user prompt), and Context Recall (whether the retriever captured all necessary source data).",
+    "source_document": "rag-guide.md",
+    "source_page": 1
+  },
+  {
+    "question": "What is the Kaggle Sample RAG Knowledge Item Dataset used for?",
+    "expected_answer": "It is a small-scale dataset specifically built for RAG beginners, ideal for experimenting with basic chunking strategies, token splitting, and vector database embeddings.",
+    "source_document": "rag-guide.md",
+    "source_page": 1
+  },
+  {
+    "question": "What lesson does the overlapping contexts test scenario teach about RAG retrieval?",
+    "expected_answer": "It teaches about K-value retrieval limitations, vector similarity noise, and the importance of chunk overlap and context scoring.",
+    "source_document": "rag-guide.md",
+    "source_page": 1
+  },
+  {
+    "question": "What types of test scenarios should be included in a RAG knowledge base to teach students about retrieval limitations?",
+    "expected_answer": "Four types: overlapping contexts for entity ambiguity, contradictory timelines for data obsolescence, multi-hop reasoning for information fragmentation, and out-of-domain traps for guardrail testing.",
+    "source_document": "rag-guide.md",
+    "source_page": 1
+  },
+  {
+    "question": "What is LangSmith used for in the context of RAG evaluation?",
+    "expected_answer": "LangSmith is used for production tracing and systematic dataset testing, benchmarking retrieval precision, tracking token latency, and evaluating complex multi-agent RAG workflows.",
+    "source_document": "rag-guide.md",
+    "source_page": 1
+  },
+  {
+    "question": "How many days per week were employees required to work in the office under the 2024 remote work policy?",
+    "expected_answer": "4 days per week.",
+    "source_document": "company-policies.docx",
+    "source_page": 1
+  },
+  {
+    "question": "What is the company remote work policy as of 2026?",
+    "expected_answer": "The 2026 policy is remote-first; employees are authorized to work from home every day of the week.",
+    "source_document": "company-policies.docx",
+    "source_page": 1
+  },
+  {
+    "question": "In which city does John Smith work?",
+    "expected_answer": "John Smith works in Lviv, Ukraine.",
+    "source_document": "company-policies.docx",
+    "source_page": 1
+  },
+  {
+    "question": "What cloud platform does Project Apollo Phase 1 use?",
+    "expected_answer": "AWS (Amazon Web Services).",
+    "source_document": "tech-reference.pdf",
+    "source_page": 1
+  },
+  {
+    "question": "What cloud platform does Project Apollo Phase 2 use?",
+    "expected_answer": "GCP (Google Cloud Platform).",
+    "source_document": "tech-reference.pdf",
+    "source_page": 1
+  },
+  {
+    "question": "What is the annual budget allocated for the company cafeteria?",
+    "expected_answer": "I cannot find this information in the available documents.",
+    "source_document": "",
+    "source_page": 0
   }
 ]

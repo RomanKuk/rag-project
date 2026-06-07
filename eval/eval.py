@@ -44,10 +44,13 @@ def ask(question: str) -> dict:
                         break
                     try:
                         parsed = json.loads(data)
-                        if "token" in parsed:
-                            full_answer += parsed["token"]
-                        if "sources" in parsed:
-                            sources = parsed["sources"]
+                        chunk_type = parsed.get("type", "")
+                        if chunk_type == "token":
+                            full_answer += parsed.get("token", "")
+                        elif chunk_type == "sources":
+                            sources = parsed.get("sources", [])
+                        elif chunk_type == "no_context":
+                            full_answer = "I cannot find this information in the available documents."
                     except json.JSONDecodeError:
                         pass
 

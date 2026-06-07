@@ -7,7 +7,8 @@ namespace DocumentQA.Infrastructure.Parsing;
 public sealed class TxtParser : IDocumentParser
 {
     public bool CanHandle(string fileExtension) =>
-        fileExtension.Equals(".txt", StringComparison.OrdinalIgnoreCase);
+        fileExtension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
+        fileExtension.Equals(".md", StringComparison.OrdinalIgnoreCase);
 
     public async IAsyncEnumerable<ParsedPage> ParseAsync(
         Stream stream,
