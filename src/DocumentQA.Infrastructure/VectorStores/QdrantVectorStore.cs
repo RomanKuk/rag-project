@@ -1,6 +1,7 @@
 using DocumentQA.Application.Abstractions.Retrieval;
 using DocumentQA.Domain.Documents;
 using DocumentQA.Domain.Retrieval;
+using Microsoft.Extensions.Logging;
 using Qdrant.Client;
 using Qdrant.Client.Grpc;
 
@@ -12,8 +13,13 @@ public sealed class QdrantVectorStore : IVectorStore
     private const ulong VectorSize = 1536;
 
     private readonly QdrantClient _client;
+    private readonly ILogger<QdrantVectorStore> _logger;
 
-    public QdrantVectorStore(QdrantClient client) => _client = client;
+    public QdrantVectorStore(QdrantClient client, ILogger<QdrantVectorStore> logger)
+    {
+        _client = client;
+        _logger = logger;
+    }
 
     public async Task UpsertAsync(
         IReadOnlyList<DocumentChunk> chunks,
@@ -38,6 +44,7 @@ public sealed class QdrantVectorStore : IVectorStore
         }).ToList();
 
         await _client.UpsertAsync(CollectionName, points, cancellationToken: ct);
+        _logger.LogInformation("Upserted {Count} points into '{Collection}'", points.Count, CollectionName);
     }
 
     public async Task<IReadOnlyList<RetrievedChunk>> SearchAsync(
@@ -46,27 +53,37 @@ public sealed class QdrantVectorStore : IVectorStore
         double minScore,
         CancellationToken ct)
     {
+        // Search without score threshold so we can log actual scores for calibration
         var results = await _client.SearchAsync(
             CollectionName,
             queryEmbedding,
             limit: (ulong)topK,
-            scoreThreshold: (float)minScore,
             cancellationToken: ct);
 
-        return results.Select(r => new RetrievedChunk(
-            new DocumentChunk
-            {
-                Id = r.Id.Uuid,
-                Content = r.Payload["content"].StringValue,
-                Metadata = new ChunkMetadata
+        foreach (var r in results)
+            _logger.LogInformation("  score={Score:F4} doc={Doc}", r.Score, r.Payload["documentName"].StringValue);
+
+        var filtered = results
+            .Where(r => r.Score >= (float)minScore)
+            .Select(r => new RetrievedChunk(
+                new DocumentChunk
                 {
-                    DocumentName = r.Payload["documentName"].StringValue,
-                    Page = (int)r.Payload["page"].IntegerValue,
-                    ChunkIndex = (int)r.Payload["chunkIndex"].IntegerValue
-                }
-            },
-            r.Score
-        )).ToList();
+                    Id = r.Id.Uuid,
+                    Content = r.Payload["content"].StringValue,
+                    Metadata = new ChunkMetadata
+                    {
+                        DocumentName = r.Payload["documentName"].StringValue,
+                        Page = (int)r.Payload["page"].IntegerValue,
+                        ChunkIndex = (int)r.Payload["chunkIndex"].IntegerValue
+                    }
+                },
+                r.Score
+            )).ToList();
+
+        _logger.LogInformation("{Kept}/{Total} chunks passed minScore={MinScore}",
+            filtered.Count, results.Count, minScore);
+
+        return filtered;
     }
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
@@ -78,6 +95,7 @@ public sealed class QdrantVectorStore : IVectorStore
                 CollectionName,
                 new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
                 cancellationToken: ct);
+            _logger.LogInformation("Created collection '{Collection}'", CollectionName);
         }
     }
 }
