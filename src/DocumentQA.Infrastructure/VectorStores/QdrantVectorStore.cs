@@ -61,20 +61,20 @@ public sealed class QdrantVectorStore : IVectorStore
             cancellationToken: ct);
 
         foreach (var r in results)
-            _logger.LogInformation("  score={Score:F4} doc={Doc}", r.Score, r.Payload["documentName"].StringValue);
+            _logger.LogInformation("  score={Score:F4} doc={Doc}", r.Score, GetString(r.Payload, "documentName"));
 
         var filtered = results
-            .Where(r => r.Score >= (float)minScore)
+            .Where(r => r.Score >= (float)minScore && r.Payload.ContainsKey("content"))
             .Select(r => new RetrievedChunk(
                 new DocumentChunk
                 {
                     Id = r.Id.Uuid,
-                    Content = r.Payload["content"].StringValue,
+                    Content = GetString(r.Payload, "content"),
                     Metadata = new ChunkMetadata
                     {
-                        DocumentName = r.Payload["documentName"].StringValue,
-                        Page = (int)r.Payload["page"].IntegerValue,
-                        ChunkIndex = (int)r.Payload["chunkIndex"].IntegerValue
+                        DocumentName = GetString(r.Payload, "documentName"),
+                        Page = (int)(r.Payload.TryGetValue("page", out var pg) ? pg.IntegerValue : 0),
+                        ChunkIndex = (int)(r.Payload.TryGetValue("chunkIndex", out var ci) ? ci.IntegerValue : 0)
                     }
                 },
                 r.Score
@@ -85,6 +85,9 @@ public sealed class QdrantVectorStore : IVectorStore
 
         return filtered;
     }
+
+    private static string GetString(IDictionary<string, Qdrant.Client.Grpc.Value> payload, string key)
+        => payload.TryGetValue(key, out var v) ? v.StringValue : string.Empty;
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
     {
