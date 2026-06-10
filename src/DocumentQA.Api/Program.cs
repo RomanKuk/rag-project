@@ -21,6 +21,7 @@ using DocumentQA.Infrastructure.Retrieval;
 using DocumentQA.Infrastructure.Security;
 using DocumentQA.Infrastructure.Usage;
 using DocumentQA.Infrastructure.VectorStores;
+using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
 using OpenTelemetry.Trace;
 using Qdrant.Client;
@@ -81,17 +82,51 @@ var tracker = new SqliteUsageTracker(dbPath);
 await tracker.EnsureCreatedAsync();
 builder.Services.AddSingleton<IUsageTracker>(tracker);
 
+// ── Generation (non-streaming utility port for query expansion + reranking) ───
+builder.Services.AddScoped<ICompletionPort, OpenAICompletionAdapter>();
+
 // ── Ingestion ─────────────────────────────────────────────────────────────────
+builder.Services.AddScoped<TesseractOcr>();
 builder.Services.AddScoped<IDocumentParser, PdfParser>();
 builder.Services.AddScoped<IDocumentParser, DocxParser>();
 builder.Services.AddScoped<IDocumentParser, TxtParser>();
-builder.Services.AddScoped<IChunkingStrategy, SlidingWindowChunker>();
+
+// Chunking strategy: structural (default) or sliding window
+builder.Services.AddScoped<IChunkingStrategy>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
+    return opts.ChunkingStrategy.Equals("structural", StringComparison.OrdinalIgnoreCase)
+        ? (IChunkingStrategy)sp.GetRequiredService<StructuralChunker>()
+        : sp.GetRequiredService<SlidingWindowChunker>();
+});
+builder.Services.AddScoped<StructuralChunker>();
+builder.Services.AddScoped<SlidingWindowChunker>();
 
 // ── Retrieval ─────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IEmbeddingPort, OpenAIEmbeddingAdapter>();
 builder.Services.AddScoped<IVectorStore, QdrantVectorStore>();
-builder.Services.AddScoped<IQueryProcessor, PassThroughQueryProcessor>();
-builder.Services.AddScoped<IReranker, IdentityReranker>();
+
+// Query processor: LLM expansion (default) or pass-through
+builder.Services.AddScoped<IQueryProcessor>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
+    return opts.QueryExpansionEnabled
+        ? (IQueryProcessor)sp.GetRequiredService<LlmQueryProcessor>()
+        : sp.GetRequiredService<PassThroughQueryProcessor>();
+});
+builder.Services.AddScoped<LlmQueryProcessor>();
+builder.Services.AddScoped<PassThroughQueryProcessor>();
+
+// Reranker: LLM (default) or identity
+builder.Services.AddScoped<IReranker>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
+    return opts.RerankerStrategy.Equals("llm", StringComparison.OrdinalIgnoreCase)
+        ? (IReranker)sp.GetRequiredService<LlmReranker>()
+        : sp.GetRequiredService<IdentityReranker>();
+});
+builder.Services.AddScoped<LlmReranker>();
+builder.Services.AddScoped<IdentityReranker>();
 
 // ── Generation ────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IPromptBuilder, TemplatePromptBuilder>();

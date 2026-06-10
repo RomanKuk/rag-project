@@ -67,12 +67,15 @@ public sealed class AskQuestionHandler
 
         // ── Embed (one call — reused for both cache and RAG) ──────────────
         float[] queryVector;
+        ProcessedQuery processed;
         using (var embedActivity = RagActivitySource.Source.StartActivity("embed-query"))
         {
-            var processed = await _queryProcessor.ProcessAsync(question, ct);
+            processed = await _queryProcessor.ProcessAsync(question, ct);
             queryVector = await _embedding.EmbedAsync(processed.SearchText, ct);
             embedActivity?.SetTag("embedding.dims", queryVector.Length);
-            _logger.LogInformation("Embedding generated ({Dims} dims)", queryVector.Length);
+            embedActivity?.SetTag("keywords.count", processed.Keywords.Count);
+            _logger.LogInformation("Embedding generated ({Dims} dims), {KwCount} keywords extracted",
+                queryVector.Length, processed.Keywords.Count);
         }
 
         // ── Semantic cache lookup ─────────────────────────────────────────
@@ -97,7 +100,7 @@ public sealed class AskQuestionHandler
         }
 
         // ── Vector search ─────────────────────────────────────────────────
-        var candidates = await SearchWithSpanAsync(queryVector, ct);
+        var candidates = await SearchWithSpanAsync(queryVector, processed.Keywords, ct);
 
         _logger.LogInformation("Search returned {Count} candidates (minScore={MinScore})",
             candidates.Count, _options.MinRelevanceScore);
@@ -200,11 +203,12 @@ public sealed class AskQuestionHandler
     }
 
     private async Task<IReadOnlyList<Domain.Retrieval.RetrievedChunk>> SearchWithSpanAsync(
-        float[] queryVector, CancellationToken ct)
+        float[] queryVector, IReadOnlyList<string> keywords, CancellationToken ct)
     {
         using var activity = RagActivitySource.Source.StartActivity("vector-search");
-        var result = await _vectorStore.SearchAsync(
-            queryVector, _options.RetrievalTopK, _options.MinRelevanceScore, ct);
+        activity?.SetTag("keywords.count", keywords.Count);
+        var result = await _vectorStore.SearchHybridAsync(
+            queryVector, keywords, _options.RetrievalTopK, _options.MinRelevanceScore, ct);
         activity?.SetTag("results.count", result.Count);
         return result;
     }

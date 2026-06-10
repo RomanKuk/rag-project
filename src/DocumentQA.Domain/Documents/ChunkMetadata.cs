@@ -8,4 +8,8 @@ public sealed record ChunkMetadata
     public DateTimeOffset IngestedAt { get; init; } = DateTimeOffset.UtcNow;
     public string? Source { get; init; }
     public IReadOnlyList<string> Tags { get; init; } = [];
+    // Structural metadata — populated by StructuralChunker / IngestDocumentHandler
+    public string? Section { get; init; }
+    public string? DocumentType { get; init; }
+    public string? DocumentDate { get; init; }
 }
