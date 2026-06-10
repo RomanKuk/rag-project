@@ -9,12 +9,24 @@ export class DocumentService {
 
   constructor(private readonly http: HttpClient) {}
 
-  upload(file: File): Observable<{ message: string; fileName: string }> {
+  upload(file: File): Observable<{ chunks: number; file: string; tenant: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    return this.http.post<{ message: string; fileName: string }>(
+    return this.http.post<{ chunks: number; file: string; tenant: string }>(
       `${this.apiUrl}/api/documents/upload`,
       formData
+    );
+  }
+
+  list(): Observable<{ documents: string[]; tenant: string }> {
+    return this.http.get<{ documents: string[]; tenant: string }>(
+      `${this.apiUrl}/api/documents`
+    );
+  }
+
+  delete(name: string): Observable<{ deleted: string; tenant: string }> {
+    return this.http.delete<{ deleted: string; tenant: string }>(
+      `${this.apiUrl}/api/documents/${encodeURIComponent(name)}`
     );
   }
 }

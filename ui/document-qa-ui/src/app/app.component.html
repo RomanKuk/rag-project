@@ -1,11 +1,27 @@
 <div class="app-layout">
   <header class="app-header">
-    <h1>Document Q&A Assistant</h1>
-    <app-document-upload />
+    <h1>Document Q&A</h1>
+    <div class="header-controls">
+      <input
+        class="api-key-input"
+        type="password"
+        placeholder="API key (optional)"
+        [value]="apiKey()"
+        (input)="onApiKeyChange($any($event.target).value)"
+        autocomplete="off">
+      <app-document-upload (uploaded)="onUploaded()" />
+    </div>
   </header>
-  <main class="app-main">
-    <router-outlet />
-  </main>
+
+  <div class="app-body">
+    <aside class="sidebar">
+      <p class="sidebar-title">Documents</p>
+      <app-document-list />
+    </aside>
+    <main class="app-main">
+      <router-outlet />
+    </main>
+  </div>
 </div>
 
 <style>
@@ -19,15 +35,60 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 24px;
+    padding: 10px 20px;
     background: #1a1a2e;
     color: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    flex-shrink: 0;
   }
 
   .app-header h1 {
-    font-size: 1.2rem;
+    font-size: 1.1rem;
     font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .api-key-input {
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.1);
+    color: white;
+    font-size: 0.85rem;
+    width: 160px;
+    outline: none;
+  }
+
+  .api-key-input::placeholder { color: rgba(255,255,255,0.4); }
+  .api-key-input:focus { border-color: rgba(255,255,255,0.5); }
+
+  .app-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: #12122a;
+    padding: 12px 10px;
+    overflow-y: auto;
+  }
+
+  .sidebar-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 8px 4px;
   }
 
   .app-main {

@@ -60,10 +60,12 @@ public sealed class AskQuestionHandler
     public async IAsyncEnumerable<AskQuestionChunk> HandleAsync(
         string question,
         string[] modelFallbackChain,
+        string tenantId,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         using var rootActivity = RagActivitySource.Source.StartActivity("ask-question");
         rootActivity?.SetTag("question.length", question.Length);
+        rootActivity?.SetTag("tenant", tenantId);
 
         // ── Embed (one call — reused for both cache and RAG) ──────────────
         float[] queryVector;
@@ -82,7 +84,7 @@ public sealed class AskQuestionHandler
         string? cached;
         using (var cacheActivity = RagActivitySource.Source.StartActivity("cache-check"))
         {
-            cached = await _cache.TryGetAsync(queryVector, ct);
+            cached = await _cache.TryGetAsync(queryVector, tenantId, ct);
             var hit = cached is not null;
             cacheActivity?.SetTag("cache.hit", hit);
             rootActivity?.SetTag("cache.hit", hit);
@@ -100,7 +102,7 @@ public sealed class AskQuestionHandler
         }
 
         // ── Vector search ─────────────────────────────────────────────────
-        var candidates = await SearchWithSpanAsync(queryVector, processed.Keywords, ct);
+        var candidates = await SearchWithSpanAsync(queryVector, processed.Keywords, tenantId, ct);
 
         _logger.LogInformation("Search returned {Count} candidates (minScore={MinScore})",
             candidates.Count, _options.MinRelevanceScore);
@@ -197,18 +199,18 @@ public sealed class AskQuestionHandler
         // semantically similar follow-up queries to receive the same null answer.
         const string NoInfoPhrase = "I cannot find this information";
         if (!response.Contains(NoInfoPhrase, StringComparison.OrdinalIgnoreCase))
-            _ = _cache.StoreAsync(queryVector, question, response, CancellationToken.None)
+            _ = _cache.StoreAsync(queryVector, question, response, tenantId, CancellationToken.None)
                   .ContinueWith(t => _logger.LogWarning(t.Exception, "Cache store failed"),
                       TaskContinuationOptions.OnlyOnFaulted);
     }
 
     private async Task<IReadOnlyList<Domain.Retrieval.RetrievedChunk>> SearchWithSpanAsync(
-        float[] queryVector, IReadOnlyList<string> keywords, CancellationToken ct)
+        float[] queryVector, IReadOnlyList<string> keywords, string tenantId, CancellationToken ct)
     {
         using var activity = RagActivitySource.Source.StartActivity("vector-search");
         activity?.SetTag("keywords.count", keywords.Count);
         var result = await _vectorStore.SearchHybridAsync(
-            queryVector, keywords, _options.RetrievalTopK, _options.MinRelevanceScore, ct);
+            queryVector, keywords, _options.RetrievalTopK, _options.MinRelevanceScore, tenantId, ct);
         activity?.SetTag("results.count", result.Count);
         return result;
     }

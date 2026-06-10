@@ -11,6 +11,7 @@ using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.Options;
 using DocumentQA.Application.UseCases.AskQuestion;
 using DocumentQA.Application.UseCases.IngestDocument;
+using DocumentQA.Infrastructure.Agent;
 using DocumentQA.Infrastructure.Cache;
 using DocumentQA.Infrastructure.Chunking;
 using DocumentQA.Infrastructure.Embeddings;
@@ -139,6 +140,9 @@ builder.Services.AddScoped<ISemanticCache, QdrantSemanticCache>();
 // ── Use cases ─────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<AskQuestionHandler>();
 builder.Services.AddScoped<IngestDocumentHandler>();
+
+// ── Agent orchestrator (SK-based, opt-in via "agent":true in chat request) ────
+builder.Services.AddScoped<IAgentOrchestrator, SemanticKernelOrchestrator>();
 
 // ── Observability (OpenTelemetry + optional Langfuse OTLP export) ─────────────
 builder.Services.AddOpenTelemetry()

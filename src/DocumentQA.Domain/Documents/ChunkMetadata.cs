@@ -12,4 +12,6 @@ public sealed record ChunkMetadata
     public string? Section { get; init; }
     public string? DocumentType { get; init; }
     public string? DocumentDate { get; init; }
+    // Tenant isolation — scopes documents to the owning tenant
+    public string TenantId { get; init; } = "public";
 }

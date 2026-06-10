@@ -6,6 +6,7 @@ using DocumentQA.Api.Services;
 using DocumentQA.Application.Abstractions.Security;
 using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.Models;
+using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.UseCases.AskQuestion;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +18,7 @@ public static class ChatEndpoints
         app.MapPost("/api/chat", async (
             ChatRequest req,
             AskQuestionHandler handler,
+            IAgentOrchestrator orchestrator,
             IInputGuard guard,
             ISuspiciousActivityLog suspiciousLog,
             ITokenRateLimiter rateLimiter,
@@ -28,9 +30,13 @@ public static class ChatEndpoints
         {
             var logger = loggerFactory.CreateLogger("Api.Chat");
 
-            // ── Auth: resolve tier from filter (set by ApiKeyFilter) ────────
-            var tier   = ctx.Items.TryGetValue(ApiKeyFilter.TierItemKey,  out var t) ? (TierInfo)t! : DefaultTier;
-            var apiKey = ctx.Items.TryGetValue(ApiKeyFilter.ApiKeyItemKey, out var k) ? (string)k!  : "anonymous";
+            // ── Auth: resolve tenant context from filter ────────────────────
+            var tenantCtx = ctx.Items.TryGetValue(ApiKeyFilter.TenantContextItemKey, out var tc)
+                ? (TenantContext)tc!
+                : DefaultTenantContext;
+            var tier    = tenantCtx.Tier;
+            var apiKey  = tenantCtx.ApiKey;
+            var tenantId = tenantCtx.TenantId;
 
             // ── Input validation ────────────────────────────────────────────
             var validation = guard.Validate(req.Question);
@@ -79,13 +85,17 @@ public static class ChatEndpoints
             metrics.Increment();
             try
             {
-                await foreach (var chunk in handler.HandleAsync(req.Question, tier.Models, ctx.RequestAborted))
+                var history = req.History?.Select(h => new ConversationTurn(h.Role, h.Content)).ToList();
+                var chunks = req.Agent
+                    ? orchestrator.OrchestrateAsync(req.Question, tier.Models, tenantId, history, ctx.RequestAborted)
+                    : handler.HandleAsync(req.Question, tier.Models, tenantId, ctx.RequestAborted);
+
+                await foreach (var chunk in chunks)
                 {
                     if (ctx.RequestAborted.IsCancellationRequested) break;
 
                     if (chunk.Type == "done")
                     {
-                        // Emit the enriched done event (cost, sources) instead of the raw chunk
                         var usage = chunk.Usage!;
                         var cost  = Pricing.Calculate(usage.Model, usage.InputTokens, usage.OutputTokens);
                         var doneEvent = new
@@ -102,10 +112,9 @@ public static class ChatEndpoints
                             ctx.RequestAborted);
                         await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
 
-                        // Fire-and-forget: log usage + deduct rate-limit tokens
                         var latencyMs = (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                         var record    = new UsageRecord(
-                            requestId, apiKey, usage.Model,
+                            requestId, apiKey, tenantId, usage.Model,
                             usage.InputTokens, usage.OutputTokens, cost,
                             latencyMs, ttftMs, usage.CacheHit, usage.FallbackUsed);
                         _ = Task.Run(async () =>
@@ -116,11 +125,9 @@ public static class ChatEndpoints
                         continue;
                     }
 
-                    // Cache the sources list so we can embed it in the done event
                     if (chunk.Type == "sources")
                         cachedSources = chunk.Sources;
 
-                    // Track time-to-first-token
                     if (chunk.Type == "token" && ttftMs is null)
                         ttftMs = (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 
@@ -145,19 +152,26 @@ public static class ChatEndpoints
         })
         .AddEndpointFilter<ApiKeyFilter>();
 
-    // Fallback tier used when the endpoint is called without an API key in config-less dev mode.
-    // In production, ApiKeyFilter always enforces key presence.
     private static readonly TierInfo DefaultTier = new()
     {
         TokensPerMinute = int.MaxValue,
         Models = ["gpt-4o"],
     };
 
+    private static readonly TenantContext DefaultTenantContext =
+        new("public", DefaultTier, "anonymous");
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        PropertyNamingPolicy          = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition        = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy      = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition    = JsonIgnoreCondition.WhenWritingNull,
     };
 }
 
-public sealed record ChatRequest(string Question);
+public sealed record ChatRequest(
+    string Question,
+    bool Agent = false,
+    IReadOnlyList<HistoryEntry>? History = null
+);
+
+public sealed record HistoryEntry(string Role, string Content);

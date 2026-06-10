@@ -5,10 +5,11 @@ namespace DocumentQA.Api.Auth;
 
 public sealed class ApiKeyFilter(IConfiguration config) : IEndpointFilter
 {
+    public const string TenantContextItemKey = "tenantContext";
+    // Keep legacy keys for callers not yet migrated
     public const string TierItemKey   = "tier";
     public const string ApiKeyItemKey = "apiKey";
 
-    // Used when no ApiKeys section is configured (local dev / existing Angular UI).
     private static readonly TierInfo PassThroughTier = new()
     {
         TokensPerMinute = int.MaxValue,
@@ -23,8 +24,10 @@ public sealed class ApiKeyFilter(IConfiguration config) : IEndpointFilter
         // Auth is opt-in: if no keys are configured, pass through (dev mode / existing UI).
         if (apiKeyMap.Count == 0)
         {
-            ctx.HttpContext.Items[TierItemKey]   = PassThroughTier;
-            ctx.HttpContext.Items[ApiKeyItemKey] = "anonymous";
+            var anon = new TenantContext("public", PassThroughTier, "anonymous");
+            ctx.HttpContext.Items[TenantContextItemKey] = anon;
+            ctx.HttpContext.Items[TierItemKey]          = PassThroughTier;
+            ctx.HttpContext.Items[ApiKeyItemKey]        = "anonymous";
             return await next(ctx);
         }
 
@@ -36,6 +39,7 @@ public sealed class ApiKeyFilter(IConfiguration config) : IEndpointFilter
 
         var key      = keyValues.ToString();
         var tiersMap = config.GetSection("Tiers").Get<Dictionary<string, TierInfo>>() ?? [];
+        var tenantsMap = config.GetSection("Tenants").Get<Dictionary<string, string>>() ?? [];
 
         if (!apiKeyMap.TryGetValue(key, out var tierKey) ||
             !tiersMap.TryGetValue(tierKey, out var tier))
@@ -43,8 +47,13 @@ public sealed class ApiKeyFilter(IConfiguration config) : IEndpointFilter
             return Results.Json(new { detail = "Invalid API key" }, statusCode: 401);
         }
 
-        ctx.HttpContext.Items[TierItemKey]   = tier;
-        ctx.HttpContext.Items[ApiKeyItemKey] = key;
+        // Derive tenant: explicit Tenants map → fall back to the tier key → "public"
+        var tenantId = tenantsMap.TryGetValue(key, out var tid) ? tid : tierKey;
+
+        var tenantCtx = new TenantContext(tenantId, tier, key);
+        ctx.HttpContext.Items[TenantContextItemKey] = tenantCtx;
+        ctx.HttpContext.Items[TierItemKey]          = tier;
+        ctx.HttpContext.Items[ApiKeyItemKey]        = key;
         return await next(ctx);
     }
 }

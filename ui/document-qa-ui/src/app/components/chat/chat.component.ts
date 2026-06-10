@@ -1,7 +1,12 @@
 import { Component, signal, ElementRef, viewChild, effect } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ChatService } from '../../services/chat.service';
-import { ChatMessage } from '../../models/chat.models';
+import { ChatMessage, HistoryEntry } from '../../models/chat.models';
+
+const TOOL_LABELS: Record<string, string> = {
+  search_documents: 'Searching documents',
+  summarize:        'Summarizing',
+};
 
 @Component({
   selector: 'app-chat',
@@ -11,20 +16,18 @@ import { ChatMessage } from '../../models/chat.models';
   styleUrl: './chat.component.scss'
 })
 export class ChatComponent {
-  messages = signal<ChatMessage[]>([]);
-  question = signal('');
-  isLoading = signal(false);
+  messages   = signal<ChatMessage[]>([]);
+  question   = signal('');
+  isLoading  = signal(false);
+  useAgent   = signal(false);
 
   private readonly scrollContainer = viewChild<ElementRef>('scrollContainer');
 
   constructor(private readonly chatService: ChatService) {
-    // Auto-scroll when messages change
     effect(() => {
       this.messages();
       const el = this.scrollContainer()?.nativeElement as HTMLElement | undefined;
-      if (el) {
-        setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
-      }
+      if (el) setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
     });
   }
 
@@ -32,25 +35,46 @@ export class ChatComponent {
     const q = this.question().trim();
     if (!q || this.isLoading()) return;
 
-    this.messages.update(msgs => [
-      ...msgs,
-      { role: 'user', content: q, sources: [] }
-    ]);
+    this.messages.update(msgs => [...msgs, { role: 'user', content: q, sources: [] }]);
     this.question.set('');
     this.isLoading.set(true);
 
     const assistantIndex = this.messages().length;
     this.messages.update(msgs => [
       ...msgs,
-      { role: 'assistant', content: '', sources: [], isStreaming: true }
+      { role: 'assistant', content: '', sources: [], isStreaming: true },
     ]);
 
+    // Build conversation history for multi-turn (agent mode only)
+    const history: HistoryEntry[] = this.useAgent()
+      ? this.messages()
+          .slice(0, assistantIndex)
+          .filter(m => m.content)
+          .map(m => ({ role: m.role, content: m.content }))
+      : [];
+
     try {
-      for await (const event of this.chatService.streamAnswer(q)) {
-        if (event.type === 'sources' && event.sources) {
+      for await (const event of this.chatService.streamAnswer(q, {
+        agent: this.useAgent(),
+        history,
+      })) {
+        if (event.type === 'tool_call' && event.toolCall) {
+          const label = event.toolCall.status === 'running'
+            ? (TOOL_LABELS[event.toolCall.tool] ?? event.toolCall.tool) + '…'
+            : null;
           this.messages.update(msgs => {
             const updated = [...msgs];
-            updated[assistantIndex] = { ...updated[assistantIndex], sources: event.sources! };
+            updated[assistantIndex] = { ...updated[assistantIndex], activeToolCall: label ?? undefined };
+            return updated;
+          });
+        } else if (event.type === 'sources' && event.sources) {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[assistantIndex] = {
+              ...updated[assistantIndex],
+              sources: event.sources!,
+              activeToolCall: undefined,
+            };
             return updated;
           });
         } else if (event.type === 'token' && event.token) {
@@ -58,7 +82,8 @@ export class ChatComponent {
             const updated = [...msgs];
             updated[assistantIndex] = {
               ...updated[assistantIndex],
-              content: updated[assistantIndex].content + event.token
+              content: updated[assistantIndex].content + event.token,
+              activeToolCall: undefined,
             };
             return updated;
           });
@@ -67,7 +92,8 @@ export class ChatComponent {
             const updated = [...msgs];
             updated[assistantIndex] = {
               ...updated[assistantIndex],
-              content: 'No relevant documents found to answer your question.'
+              content: 'No relevant documents found to answer your question.',
+              activeToolCall: undefined,
             };
             return updated;
           });
@@ -84,23 +110,28 @@ export class ChatComponent {
           });
         }
       }
-    } catch (err) {
+    } catch {
       this.messages.update(msgs => {
         const updated = [...msgs];
         updated[assistantIndex] = {
           ...updated[assistantIndex],
-          content: 'Error: could not reach the API. Make sure the backend is running.'
+          content: 'Error: could not reach the API. Make sure the backend is running.',
+          activeToolCall: undefined,
         };
         return updated;
       });
     } finally {
       this.messages.update(msgs => {
         const updated = [...msgs];
-        updated[assistantIndex] = { ...updated[assistantIndex], isStreaming: false };
+        updated[assistantIndex] = { ...updated[assistantIndex], isStreaming: false, activeToolCall: undefined };
         return updated;
       });
       this.isLoading.set(false);
     }
+  }
+
+  clearHistory(): void {
+    this.messages.set([]);
   }
 
   formatModel(model: string): string {

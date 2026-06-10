@@ -26,15 +26,31 @@ public sealed class QdrantSemanticCache : ISemanticCache
         _logger = logger;
     }
 
-    public async Task<string?> TryGetAsync(float[] queryEmbedding, CancellationToken ct)
+    public async Task<string?> TryGetAsync(float[] queryEmbedding, string tenantId, CancellationToken ct)
     {
         if (!_opts.Enabled) return null;
 
         await EnsureCollectionAsync(ct);
 
+        var filter = new Filter
+        {
+            Must =
+            {
+                new Condition
+                {
+                    Field = new FieldCondition
+                    {
+                        Key   = "tenant_id",
+                        Match = new Match { Keyword = tenantId }
+                    }
+                }
+            }
+        };
+
         var hits = await _client.SearchAsync(
             Collection,
             queryEmbedding,
+            filter: filter,
             limit: 1,
             scoreThreshold: (float)_opts.SimilarityThreshold,
             cancellationToken: ct);
@@ -43,19 +59,18 @@ public sealed class QdrantSemanticCache : ISemanticCache
 
         var hit = hits[0];
 
-        // Check TTL via expire_at payload field
         if (hit.Payload.TryGetValue("expire_at", out var expireAt))
         {
             var expireUnix = expireAt.IntegerValue;
             if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > expireUnix)
             {
-                _logger.LogInformation("Cache EXPIRED (score={Score:F4})", hit.Score);
+                _logger.LogInformation("Cache EXPIRED (score={Score:F4}, tenant={Tenant})", hit.Score, tenantId);
                 await _client.DeleteAsync(Collection, Guid.Parse(hit.Id.Uuid), cancellationToken: ct);
                 return null;
             }
         }
 
-        _logger.LogInformation("Cache HIT (score={Score:F4})", hit.Score);
+        _logger.LogInformation("Cache HIT (score={Score:F4}, tenant={Tenant})", hit.Score, tenantId);
         return hit.Payload.TryGetValue("response", out var resp) ? resp.StringValue : null;
     }
 
@@ -63,6 +78,7 @@ public sealed class QdrantSemanticCache : ISemanticCache
         float[] queryEmbedding,
         string query,
         string response,
+        string tenantId,
         CancellationToken ct)
     {
         if (!_opts.Enabled) return;
@@ -75,15 +91,16 @@ public sealed class QdrantSemanticCache : ISemanticCache
             Id = new PointId { Uuid = Guid.NewGuid().ToString() },
             Vectors = queryEmbedding
         };
-        point.Payload["query"] = query;
-        point.Payload["response"] = response;
-        point.Payload["model"] = "gpt-4o";
+        point.Payload["tenant_id"] = tenantId;
+        point.Payload["query"]     = query;
+        point.Payload["response"]  = response;
+        point.Payload["model"]     = "gpt-4o";
         point.Payload["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         point.Payload["expire_at"] = expireAt;
 
         await _client.UpsertAsync(Collection, [point], cancellationToken: ct);
-        _logger.LogInformation("Cache STORED (ttl={Ttl}min, expires={Exp})",
-            _opts.TtlMinutes, DateTimeOffset.FromUnixTimeSeconds(expireAt).ToString("HH:mm:ss"));
+        _logger.LogInformation("Cache STORED (ttl={Ttl}min, expires={Exp}, tenant={Tenant})",
+            _opts.TtlMinutes, DateTimeOffset.FromUnixTimeSeconds(expireAt).ToString("HH:mm:ss"), tenantId);
     }
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
@@ -94,6 +111,12 @@ public sealed class QdrantSemanticCache : ISemanticCache
             await _client.CreateCollectionAsync(
                 Collection,
                 new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
+                cancellationToken: ct);
+
+            await _client.CreatePayloadIndexAsync(
+                Collection,
+                "tenant_id",
+                PayloadSchemaType.Keyword,
                 cancellationToken: ct);
         }
     }

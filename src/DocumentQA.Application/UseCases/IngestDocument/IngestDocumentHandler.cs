@@ -42,7 +42,7 @@ public sealed class IngestDocumentHandler
         _vectorStore = vectorStore;
     }
 
-    public async Task<Result<int>> HandleAsync(Stream file, string fileName, CancellationToken ct)
+    public async Task<Result<int>> HandleAsync(Stream file, string fileName, string tenantId, CancellationToken ct)
     {
         var ext = Path.GetExtension(fileName);
         var parser = _parsers.FirstOrDefault(p => p.CanHandle(ext));
@@ -68,11 +68,12 @@ public sealed class IngestDocumentHandler
                 Metadata = new ChunkMetadata
                 {
                     DocumentName = fileName,
-                    Page = page.PageNumber,
-                    ChunkIndex = idx,
-                    Section = piece.Heading,
+                    Page         = page.PageNumber,
+                    ChunkIndex   = idx,
+                    Section      = piece.Heading,
                     DocumentType = docType,
                     DocumentDate = docDate,
+                    TenantId     = tenantId,
                 }
             }));
         }
@@ -83,7 +84,7 @@ public sealed class IngestDocumentHandler
         var embeddings = await _embedding.EmbedBatchAsync(
             chunks.Select(c => c.Content).ToList(), ct);
 
-        await _vectorStore.UpsertAsync(chunks, embeddings, ct);
+        await _vectorStore.UpsertAsync(chunks, embeddings, tenantId, ct);
 
         return Result<int>.Success(chunks.Count);
     }

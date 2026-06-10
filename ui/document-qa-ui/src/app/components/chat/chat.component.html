@@ -1,4 +1,16 @@
 <div class="chat-container">
+  <div class="chat-toolbar">
+    <label class="agent-toggle">
+      <input type="checkbox"
+             [checked]="useAgent()"
+             (change)="useAgent.set($any($event.target).checked)">
+      Agent mode
+    </label>
+    @if (messages().length > 0) {
+      <button class="btn-clear" (click)="clearHistory()">Clear</button>
+    }
+  </div>
+
   <div class="messages" #scrollContainer>
     @if (messages().length === 0) {
       <div class="empty-state">
@@ -9,9 +21,15 @@
     @for (msg of messages(); track $index) {
       <div class="message" [class]="msg.role">
         <div class="bubble">
+          @if (msg.activeToolCall) {
+            <div class="tool-activity">
+              <span class="tool-spinner"></span>
+              {{ msg.activeToolCall }}
+            </div>
+          }
           <div class="content">
             {{ msg.content }}
-            @if (msg.isStreaming) {
+            @if (msg.isStreaming && !msg.activeToolCall) {
               <span class="cursor">▋</span>
             }
           </div>
@@ -27,6 +45,9 @@
             <div class="msg-meta">
               @if (msg.cacheHit) {
                 <span class="meta-tag cache">cached</span>
+              }
+              @if (useAgent()) {
+                <span class="meta-tag agent">agent</span>
               }
               @if (msg.model) {
                 <span class="meta-tag model">{{ formatModel(msg.model) }}</span>

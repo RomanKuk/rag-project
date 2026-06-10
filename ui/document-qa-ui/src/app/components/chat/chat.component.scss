@@ -122,6 +122,71 @@
   }
 }
 
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+  border-bottom: 1px solid #eee;
+}
+
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #555;
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    cursor: pointer;
+    accent-color: #1a1a2e;
+  }
+}
+
+.btn-clear {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 0.8rem;
+  background: transparent;
+  color: #999;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover { color: #333; border-color: #aaa; }
+}
+
+.tool-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: #5c6bc0;
+  padding-bottom: 6px;
+  font-style: italic;
+}
+
+.tool-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #c5cae9;
+  border-top-color: #5c6bc0;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.meta-tag.agent {
+  background: #e8eaf6;
+  color: #3949ab;
+}
+
 .input-area {
   display: flex;
   gap: 8px;

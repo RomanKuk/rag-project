@@ -1,0 +1,50 @@
+.doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 140px;
+  overflow-y: auto;
+  min-width: 180px;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.08);
+
+  &:hover { background: rgba(255,255,255,0.14); }
+}
+
+.doc-name {
+  flex: 1;
+  font-size: 0.78rem;
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-delete {
+  background: transparent;
+  border: none;
+  color: #f48fb1;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+
+  &:hover:not(:disabled) { color: #f06292; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.empty, .error {
+  font-size: 0.78rem;
+  color: #888;
+  margin: 0;
+}
+
+.error { color: #f48fb1; }

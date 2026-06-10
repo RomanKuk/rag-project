@@ -1,4 +1,4 @@
-import { Component, signal } from '@angular/core';
+import { Component, EventEmitter, Output, signal } from '@angular/core';
 import { DocumentService } from '../../services/document.service';
 
 type UploadState = 'idle' | 'uploading' | 'success' | 'error';
@@ -10,14 +10,16 @@ type UploadState = 'idle' | 'uploading' | 'success' | 'error';
   styleUrl: './document-upload.component.scss'
 })
 export class DocumentUploadComponent {
-  state = signal<UploadState>('idle');
+  @Output() uploaded = new EventEmitter<void>();
+
+  state   = signal<UploadState>('idle');
   message = signal('');
 
   constructor(private readonly documentService: DocumentService) {}
 
   onFileSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
+    const file  = input.files?.[0];
     if (!file) return;
 
     this.state.set('uploading');
@@ -26,8 +28,9 @@ export class DocumentUploadComponent {
     this.documentService.upload(file).subscribe({
       next: (res) => {
         this.state.set('success');
-        this.message.set(`"${res.fileName}" ingested successfully.`);
+        this.message.set(`"${res.file}" ingested (${res.chunks} chunks).`);
         input.value = '';
+        this.uploaded.emit();
         setTimeout(() => { this.state.set('idle'); this.message.set(''); }, 3000);
       },
       error: () => {

@@ -12,6 +12,7 @@ public sealed class SqliteUsageTracker(string dbPath) : IUsageTracker
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id    TEXT    NOT NULL,
             api_key       TEXT    NOT NULL,
+            tenant_id     TEXT    NOT NULL DEFAULT 'public',
             model         TEXT    NOT NULL,
             input_tokens  INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL,
@@ -28,6 +29,15 @@ public sealed class SqliteUsageTracker(string dbPath) : IUsageTracker
     {
         await using var conn = new SqliteConnection($"Data Source={dbPath}");
         await conn.ExecuteAsync(CreateSql);
+        // Add tenant_id column to any existing DB that was created before this change
+        try
+        {
+            await conn.ExecuteAsync("ALTER TABLE usage_logs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'public'");
+        }
+        catch
+        {
+            // Column already exists — safe to ignore
+        }
     }
 
     public async Task LogAsync(UsageRecord r, CancellationToken ct = default)
@@ -35,11 +45,11 @@ public sealed class SqliteUsageTracker(string dbPath) : IUsageTracker
         await using var conn = new SqliteConnection($"Data Source={dbPath}");
         await conn.ExecuteAsync(
             "INSERT INTO usage_logs " +
-            "(request_id,api_key,model,input_tokens,output_tokens,cost_usd,latency_ms,ttft_ms,cache_hit,fallback_used) " +
-            "VALUES (@RequestId,@ApiKey,@Model,@InputTokens,@OutputTokens,@CostUsd,@LatencyMs,@TtftMs,@CacheHit,@FallbackUsed)",
+            "(request_id,api_key,tenant_id,model,input_tokens,output_tokens,cost_usd,latency_ms,ttft_ms,cache_hit,fallback_used) " +
+            "VALUES (@RequestId,@ApiKey,@TenantId,@Model,@InputTokens,@OutputTokens,@CostUsd,@LatencyMs,@TtftMs,@CacheHit,@FallbackUsed)",
             new
             {
-                r.RequestId, r.ApiKey, r.Model,
+                r.RequestId, r.ApiKey, r.TenantId, r.Model,
                 r.InputTokens, r.OutputTokens,
                 CostUsd = (double)r.CostUsd,
                 r.LatencyMs, r.TtftMs,
