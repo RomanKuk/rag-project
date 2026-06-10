@@ -6,7 +6,7 @@ namespace DocumentQA.Infrastructure.Generation;
 
 public sealed class TemplatePromptBuilder : IPromptBuilder
 {
-    // XML-tag role separation prevents user input from overriding system instructions
+    // XML-tag role separation prevents user input from overriding system instructions.
     private const string SystemPrompt = """
         You are a document assistant. Answer ONLY from the provided context inside <context> tags.
         Rules:
@@ -32,7 +32,7 @@ public sealed class TemplatePromptBuilder : IPromptBuilder
             citations.Add(new Citation(
                 m.DocumentName,
                 m.Page,
-                rc.Chunk.Content[..Math.Min(200, rc.Chunk.Content.Length)]));
+                rc.Chunk.Content));
         }
         sb.AppendLine("</context>");
 

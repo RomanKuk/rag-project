@@ -23,6 +23,17 @@
               }
             </div>
           }
+          @if (!msg.isStreaming && msg.role === 'assistant' && msg.costUsd !== undefined) {
+            <div class="msg-meta">
+              @if (msg.cacheHit) {
+                <span class="meta-tag cache">cached</span>
+              }
+              @if (msg.model) {
+                <span class="meta-tag model">{{ formatModel(msg.model) }}</span>
+              }
+              <span class="meta-tag cost">${{ msg.costUsd.toFixed(4) }}</span>
+            </div>
+          }
         </div>
       </div>
     }

@@ -53,6 +53,8 @@ public sealed class QdrantVectorStore : IVectorStore
         double minScore,
         CancellationToken ct)
     {
+        await EnsureCollectionAsync(ct);
+
         // Search without score threshold so we can log actual scores for calibration
         var results = await _client.SearchAsync(
             CollectionName,

@@ -34,6 +34,11 @@ public sealed class IngestDocumentHandler
         var chunks = new List<DocumentChunk>();
         await foreach (var page in parser.ParseAsync(file, fileName, ct))
         {
+            // Skip near-empty pages (images, scanned attachments, signature blocks).
+            // These pages produce meaningless tiny chunks that contaminate search results.
+            var wordCount = page.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+            if (wordCount < 40) continue;
+
             var pieces = _chunker.Chunk(page.Text).ToList();
             chunks.AddRange(pieces.Select((text, idx) => new DocumentChunk
             {

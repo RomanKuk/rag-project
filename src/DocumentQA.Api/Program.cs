@@ -1,4 +1,5 @@
 using System.Text;
+using DocumentQA.Api.Auth;
 using DocumentQA.Api.Endpoints;
 using DocumentQA.Api.Services;
 using DocumentQA.Application.Abstractions.Cache;
@@ -6,6 +7,7 @@ using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.Abstractions.Ingestion;
 using DocumentQA.Application.Abstractions.Retrieval;
 using DocumentQA.Application.Abstractions.Security;
+using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.Options;
 using DocumentQA.Application.UseCases.AskQuestion;
 using DocumentQA.Application.UseCases.IngestDocument;
@@ -14,12 +16,15 @@ using DocumentQA.Infrastructure.Chunking;
 using DocumentQA.Infrastructure.Embeddings;
 using DocumentQA.Infrastructure.Generation;
 using DocumentQA.Infrastructure.Parsing;
+using DocumentQA.Infrastructure.RateLimiting;
 using DocumentQA.Infrastructure.Retrieval;
 using DocumentQA.Infrastructure.Security;
+using DocumentQA.Infrastructure.Usage;
 using DocumentQA.Infrastructure.VectorStores;
 using Microsoft.SemanticKernel;
 using OpenTelemetry.Trace;
 using Qdrant.Client;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,12 +36,7 @@ builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection("Cache
 builder.Services.AddCors(o => o.AddPolicy("Angular", p =>
     p.WithOrigins("http://localhost:4200").AllowAnyHeader().AllowAnyMethod()));
 
-// ── Semantic Kernel ───────────────────────────────────────────────────────────
-builder.Services.AddOpenAIChatCompletion(
-    modelId: "gpt-4o",
-    apiKey: builder.Configuration["OpenAI:ApiKey"]!,
-    serviceId: "chat");
-
+// ── Semantic Kernel — embeddings only (chat completion is handled per-call in OpenAIChatAdapter) ─
 builder.Services.AddOpenAIEmbeddingGenerator(
     modelId: "text-embedding-3-small",
     apiKey: builder.Configuration["OpenAI:ApiKey"]!,
@@ -58,6 +58,28 @@ builder.Services.AddSingleton<StreamMetrics>();
 // ── Security ──────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IInputGuard, InputGuard>();
 builder.Services.AddSingleton<ISuspiciousActivityLog, SuspiciousActivityLogger>();
+
+// ── Auth filter ───────────────────────────────────────────────────────────────
+builder.Services.AddTransient<ApiKeyFilter>();
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+var redisConn = builder.Configuration["Redis:ConnectionString"];
+if (!string.IsNullOrEmpty(redisConn))
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+        ConnectionMultiplexer.Connect(redisConn));
+    builder.Services.AddSingleton<ITokenRateLimiter, RedisTokenRateLimiter>();
+}
+else
+{
+    builder.Services.AddSingleton<ITokenRateLimiter, NullTokenRateLimiter>();
+}
+
+// ── Usage tracking ────────────────────────────────────────────────────────────
+var dbPath  = builder.Configuration["UsageDb:Path"] ?? "usage.db";
+var tracker = new SqliteUsageTracker(dbPath);
+await tracker.EnsureCreatedAsync();
+builder.Services.AddSingleton<IUsageTracker>(tracker);
 
 // ── Ingestion ─────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IDocumentParser, PdfParser>();
@@ -111,6 +133,7 @@ var app = builder.Build();
 app.UseCors("Angular");
 app.MapDocumentsEndpoints();
 app.MapChatEndpoints();
+app.MapUsageEndpoints();
 app.MapGet("/health", (StreamMetrics m, LlmGate g) => Results.Ok(new
 {
     status = "ok",

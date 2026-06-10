@@ -17,6 +17,8 @@ services:
       - OpenAI__ApiKey=${OPENAI_API_KEY}
       - Qdrant__Host=qdrant
       - Qdrant__Port=6334
+      - OpenRouter__ApiKey=${OPENROUTER_API_KEY:-}
+      - Redis__ConnectionString=${UPSTASH_REDIS_URL:-}
     depends_on:
       - qdrant
     restart: on-failure

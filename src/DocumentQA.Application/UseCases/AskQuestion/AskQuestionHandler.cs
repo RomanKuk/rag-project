@@ -14,7 +14,6 @@ namespace DocumentQA.Application.UseCases.AskQuestion;
 
 public sealed class AskQuestionHandler
 {
-    // System prompt phrases that must never appear verbatim in the LLM output
     private static readonly string[] OutputForbiddenFragments =
     [
         "You are a document assistant",
@@ -60,6 +59,7 @@ public sealed class AskQuestionHandler
 
     public async IAsyncEnumerable<AskQuestionChunk> HandleAsync(
         string question,
+        string[] modelFallbackChain,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         using var rootActivity = RagActivitySource.Source.StartActivity("ask-question");
@@ -89,6 +89,10 @@ public sealed class AskQuestionHandler
         {
             foreach (var token in SplitIntoTokens(cached))
                 yield return AskQuestionChunk.OfToken(token);
+            yield return AskQuestionChunk.Done(new UsageSummary(
+                question.Length / 4, cached.Length / 4,
+                CacheHit: true, FallbackUsed: false,
+                Model: modelFallbackChain[0]));
             yield break;
         }
 
@@ -111,19 +115,55 @@ public sealed class AskQuestionHandler
         var prompt = _promptBuilder.Build(question, ranked);
         yield return AskQuestionChunk.OfSources(prompt.Sources);
 
-        // ── LLM streaming + accumulate for cache & output filter ──────────
+        // ── LLM streaming with model fallback ─────────────────────────────
         var accumulated = new StringBuilder();
+        var usedModel = modelFallbackChain[0];
+        var fallbackUsed = false;
+
         using (var llmActivity = RagActivitySource.Source.StartActivity("llm-completion"))
         {
-            llmActivity?.SetTag("model", "gpt-4o");
             llmActivity?.SetTag("context.chunks", ranked.Count);
 
-            await foreach (var token in _chat.StreamAsync(prompt, ct))
+            // CS1626 workaround: yield return is not allowed inside try-catch.
+            // Using GetAsyncEnumerator lets us catch MoveNextAsync failures while
+            // yielding the token (the Current value) outside the catch block.
+            foreach (var model in modelFallbackChain)
             {
-                accumulated.Append(token);
-                yield return AskQuestionChunk.OfToken(token);
+                var failed = false;
+                var enumerator = _chat.StreamAsync(prompt, model, ct).GetAsyncEnumerator(ct);
+                await using (enumerator)
+                {
+                    while (true)
+                    {
+                        bool hasMore;
+                        try
+                        {
+                            hasMore = await enumerator.MoveNextAsync();
+                        }
+                        catch (Exception ex) when (model != modelFallbackChain[^1])
+                        {
+                            _logger.LogWarning(ex, "Model {Model} failed, trying next in fallback chain", model);
+                            failed = true;
+                            break;
+                        }
+
+                        if (!hasMore) break;
+
+                        var token = enumerator.Current;
+                        accumulated.Append(token);
+                        yield return AskQuestionChunk.OfToken(token);
+                    }
+                }
+
+                if (!failed)
+                {
+                    usedModel = model;
+                    fallbackUsed = model != modelFallbackChain[0];
+                    break;
+                }
             }
 
+            llmActivity?.SetTag("model", usedModel);
             llmActivity?.SetTag("response.length", accumulated.Length);
         }
 
@@ -141,10 +181,22 @@ public sealed class AskQuestionHandler
             }
         }
 
+        // ── Yield usage summary ───────────────────────────────────────────
+        var inputTokens  = (prompt.SystemPrompt.Length + prompt.UserPrompt.Length) / 4;
+        var outputTokens = response.Length / 4;
+        yield return AskQuestionChunk.Done(new UsageSummary(
+            inputTokens, outputTokens,
+            CacheHit: false, FallbackUsed: fallbackUsed,
+            Model: usedModel));
+
         // ── Cache store (fire-and-forget, don't fail the response) ────────
-        _ = _cache.StoreAsync(queryVector, question, response, CancellationToken.None)
-              .ContinueWith(t => _logger.LogWarning(t.Exception, "Cache store failed"),
-                  TaskContinuationOptions.OnlyOnFaulted);
+        // Skip caching "I cannot find" answers — caching them would cause all
+        // semantically similar follow-up queries to receive the same null answer.
+        const string NoInfoPhrase = "I cannot find this information";
+        if (!response.Contains(NoInfoPhrase, StringComparison.OrdinalIgnoreCase))
+            _ = _cache.StoreAsync(queryVector, question, response, CancellationToken.None)
+                  .ContinueWith(t => _logger.LogWarning(t.Exception, "Cache store failed"),
+                      TaskContinuationOptions.OnlyOnFaulted);
     }
 
     private async Task<IReadOnlyList<Domain.Retrieval.RetrievedChunk>> SearchWithSpanAsync(

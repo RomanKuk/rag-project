@@ -93,6 +93,35 @@
   border-radius: 12px;
 }
 
+.msg-meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.meta-tag {
+  font-size: 0.7rem;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+
+  &.cache {
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+
+  &.model {
+    background: #fce4ec;
+    color: #880e4f;
+  }
+
+  &.cost {
+    background: #fff8e1;
+    color: #6d4c00;
+  }
+}
+
 .input-area {
   display: flex;
   gap: 8px;

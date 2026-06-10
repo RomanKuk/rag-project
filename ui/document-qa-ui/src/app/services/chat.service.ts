@@ -3,15 +3,22 @@ import { environment } from '../../environments/environment';
 import { SourceReference } from '../models/chat.models';
 
 interface ServerChunk {
-  type: 'token' | 'sources' | 'no_context';
+  type: 'token' | 'sources' | 'no_context' | 'done';
   token?: string;
   sources?: SourceReference[];
+  cost_usd?: number;
+  cache_hit?: boolean;
+  fallback_used?: boolean;
+  usage?: { input_tokens: number; output_tokens: number; model: string };
 }
 
 export interface StreamEvent {
-  type: 'token' | 'sources' | 'no_context';
+  type: 'token' | 'sources' | 'no_context' | 'done';
   token?: string;
   sources?: SourceReference[];
+  cost_usd?: number;
+  cache_hit?: boolean;
+  usage?: { input_tokens: number; output_tokens: number; model: string };
 }
 
 @Injectable({ providedIn: 'root' })

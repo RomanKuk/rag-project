@@ -71,6 +71,17 @@ export class ChatComponent {
             };
             return updated;
           });
+        } else if (event.type === 'done') {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[assistantIndex] = {
+              ...updated[assistantIndex],
+              costUsd:  event.cost_usd,
+              cacheHit: event.cache_hit,
+              model:    event.usage?.model,
+            };
+            return updated;
+          });
         }
       }
     } catch (err) {
@@ -90,6 +101,10 @@ export class ChatComponent {
       });
       this.isLoading.set(false);
     }
+  }
+
+  formatModel(model: string): string {
+    return model.includes('/') ? model.split('/').pop()! : model;
   }
 
   onKeyDown(event: KeyboardEvent): void {
