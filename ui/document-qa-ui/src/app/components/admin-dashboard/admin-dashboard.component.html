@@ -1,0 +1,120 @@
+<div class="admin-shell">
+  <header class="admin-header">
+    <span class="brand">Document Q&A — Admin</span>
+    <div class="header-right">
+      <span class="user-badge">{{ auth.currentUser()?.displayName }}</span>
+      <button class="btn-logout" (click)="auth.logout()">Log out</button>
+    </div>
+  </header>
+
+  @if (loading()) {
+    <div class="loading">Loading dashboard…</div>
+  } @else if (error()) {
+    <div class="error-banner">{{ error() }}</div>
+  } @else {
+    <main class="admin-main">
+
+      <!-- Summary cards -->
+      <section class="cards">
+        <div class="card">
+          <span class="card-label">Tenants</span>
+          <span class="card-value">{{ metrics()?.totalTenants }}</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Users</span>
+          <span class="card-value">{{ metrics()?.totalUsers }}</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Requests (all time)</span>
+          <span class="card-value">{{ metrics()?.totalRequests | number }}</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Cost (all time)</span>
+          <span class="card-value">${{ metrics()?.totalCostUsd?.toFixed(4) }}</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Cache hit rate</span>
+          <span class="card-value">{{ ((metrics()?.cacheHitRate ?? 0) * 100).toFixed(1) }}%</span>
+        </div>
+      </section>
+
+      <!-- Charts row -->
+      <section class="charts-row">
+        @if (barChartData()) {
+          <div class="chart-card">
+            <canvas baseChart
+              [data]="barChartData()!"
+              [options]="barChartOptions"
+              type="bar">
+            </canvas>
+          </div>
+        }
+
+        <div class="chart-card">
+          <div class="chart-toolbar">
+            <select [value]="selectedTenantId() ?? ''" (change)="selectedTenantId.set($any($event.target).value || undefined); loadTimeSeries()">
+              <option value="">All tenants</option>
+              @for (t of tenants(); track t.slug) {
+                <option [value]="t.slug">{{ t.name }}</option>
+              }
+            </select>
+            <select [value]="timeseriesDays()" (change)="timeseriesDays.set(+$any($event.target).value); loadTimeSeries()">
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
+          @if (lineChartData()) {
+            <canvas baseChart
+              [data]="lineChartData()!"
+              [options]="lineChartOptions"
+              type="line">
+            </canvas>
+          }
+        </div>
+      </section>
+
+      <!-- Per-tenant table -->
+      <section class="table-section">
+        <h2>Per-tenant breakdown</h2>
+        <table class="metrics-table">
+          <thead>
+            <tr>
+              <th>Tenant</th><th>Requests</th><th>Tokens</th><th>Cost (USD)</th>
+              <th>Cache hit</th><th>Avg latency</th><th>Users</th><th>Docs</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (t of metrics()?.topTenantsByCost; track t.tenantId) {
+              <tr>
+                <td>{{ t.tenantName }}</td>
+                <td>{{ t.requests | number }}</td>
+                <td>{{ (t.tokens / 1000).toFixed(1) }}k</td>
+                <td>${{ t.costUsd.toFixed(4) }}</td>
+                <td>{{ (t.cacheHitRate * 100).toFixed(1) }}%</td>
+                <td>{{ t.avgLatencyMs.toFixed(0) }}ms</td>
+                <td>{{ t.userCount }}</td>
+                <td>{{ t.documentCount }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Create tenant -->
+      <section class="create-section">
+        <h2>Create tenant</h2>
+        <form class="create-form" (ngSubmit)="createTenant()">
+          <input placeholder="Tenant name" [value]="newTenantName()" (input)="newTenantName.set($any($event.target).value)" required>
+          <input placeholder="Owner email" type="email" [value]="newOwnerEmail()" (input)="newOwnerEmail.set($any($event.target).value)" required>
+          <input placeholder="Owner password" type="password" [value]="newOwnerPassword()" (input)="newOwnerPassword.set($any($event.target).value)" required>
+          <input placeholder="Owner display name (optional)" [value]="newOwnerDisplayName()" (input)="newOwnerDisplayName.set($any($event.target).value)">
+          <button type="submit" class="btn-primary">Create</button>
+        </form>
+        @if (createError())   { <p class="error-msg">{{ createError() }}</p> }
+        @if (createSuccess()) { <p class="success-msg">{{ createSuccess() }}</p> }
+      </section>
+
+    </main>
+  }
+</div>

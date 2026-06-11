@@ -1,8 +1,10 @@
 using System.Text.RegularExpressions;
 using DocumentQA.Application.Abstractions.Ingestion;
 using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Models;
 using DocumentQA.Domain.Common;
 using DocumentQA.Domain.Documents;
+using DocumentQA.Domain.Identity;
 
 namespace DocumentQA.Application.UseCases.IngestDocument;
 
@@ -42,7 +44,8 @@ public sealed class IngestDocumentHandler
         _vectorStore = vectorStore;
     }
 
-    public async Task<Result<int>> HandleAsync(Stream file, string fileName, string tenantId, CancellationToken ct)
+    public async Task<Result<int>> HandleAsync(
+        Stream file, string fileName, RetrievalScope scope, CancellationToken ct)
     {
         var ext = Path.GetExtension(fileName);
         var parser = _parsers.FirstOrDefault(p => p.CanHandle(ext));
@@ -55,8 +58,6 @@ public sealed class IngestDocumentHandler
         var chunks = new List<DocumentChunk>();
         await foreach (var page in parser.ParseAsync(file, fileName, ct))
         {
-            // Skip near-empty pages (images, scanned attachments, signature blocks).
-            // These pages produce meaningless tiny chunks that contaminate search results.
             var wordCount = page.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
             if (wordCount < 40) continue;
 
@@ -73,7 +74,10 @@ public sealed class IngestDocumentHandler
                     Section      = piece.Heading,
                     DocumentType = docType,
                     DocumentDate = docDate,
-                    TenantId     = tenantId,
+                    TenantId     = scope.TenantId,
+                    Visibility   = scope.Mode == ScopeMode.Private
+                        ? DocumentVisibility.Private : DocumentVisibility.Shared,
+                    OwnerUserId  = scope.UserId,
                 }
             }));
         }
@@ -84,7 +88,7 @@ public sealed class IngestDocumentHandler
         var embeddings = await _embedding.EmbedBatchAsync(
             chunks.Select(c => c.Content).ToList(), ct);
 
-        await _vectorStore.UpsertAsync(chunks, embeddings, tenantId, ct);
+        await _vectorStore.UpsertAsync(chunks, embeddings, scope, ct);
 
         return Result<int>.Success(chunks.Count);
     }

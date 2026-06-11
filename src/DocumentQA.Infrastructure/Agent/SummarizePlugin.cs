@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
 using Microsoft.SemanticKernel;
 
@@ -12,7 +13,7 @@ public sealed class SummarizePlugin(
     IVectorStore vectorStore,
     ICompletionPort completion,
     RagOptions options,
-    string tenantId)
+    RetrievalScope scope)
 {
     [KernelFunction("summarize")]
     [Description("Summarize a topic or document by name. Use this when the user explicitly asks for a summary.")]
@@ -26,13 +27,13 @@ public sealed class SummarizePlugin(
         var candidates = await vectorStore.SearchHybridAsync(
             queryVector, processed.Keywords,
             options.RetrievalTopK, options.MinRelevanceScore,
-            tenantId, cancellationToken);
+            scope, cancellationToken);
 
         if (candidates.Count == 0)
             return $"No content found for '{topic}'.";
 
         var ranked = await vectorStore.SearchAsync(
-            queryVector, options.RerankTopN, options.MinRelevanceScore, tenantId, cancellationToken);
+            queryVector, options.RerankTopN, options.MinRelevanceScore, scope, cancellationToken);
 
         var context = string.Join("\n\n", ranked.Select(r => r.Chunk.Content));
         var system  = "You are a document summarizer. Produce a concise, accurate summary.";

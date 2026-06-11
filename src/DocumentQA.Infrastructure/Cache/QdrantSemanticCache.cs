@@ -1,4 +1,5 @@
 using DocumentQA.Application.Abstractions.Cache;
+using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -26,24 +27,18 @@ public sealed class QdrantSemanticCache : ISemanticCache
         _logger = logger;
     }
 
-    public async Task<string?> TryGetAsync(float[] queryEmbedding, string tenantId, CancellationToken ct)
+    public async Task<string?> TryGetAsync(float[] queryEmbedding, RetrievalScope scope, CancellationToken ct)
     {
         if (!_opts.Enabled) return null;
 
         await EnsureCollectionAsync(ct);
 
+        var cacheKey = CacheKey(scope);
         var filter = new Filter
         {
             Must =
             {
-                new Condition
-                {
-                    Field = new FieldCondition
-                    {
-                        Key   = "tenant_id",
-                        Match = new Match { Keyword = tenantId }
-                    }
-                }
+                new Condition { Field = new FieldCondition { Key = "cache_key", Match = new Match { Keyword = cacheKey } } }
             }
         };
 
@@ -64,44 +59,46 @@ public sealed class QdrantSemanticCache : ISemanticCache
             var expireUnix = expireAt.IntegerValue;
             if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > expireUnix)
             {
-                _logger.LogInformation("Cache EXPIRED (score={Score:F4}, tenant={Tenant})", hit.Score, tenantId);
+                _logger.LogInformation("Cache EXPIRED (score={Score:F4}, key={Key})", hit.Score, cacheKey);
                 await _client.DeleteAsync(Collection, Guid.Parse(hit.Id.Uuid), cancellationToken: ct);
                 return null;
             }
         }
 
-        _logger.LogInformation("Cache HIT (score={Score:F4}, tenant={Tenant})", hit.Score, tenantId);
+        _logger.LogInformation("Cache HIT (score={Score:F4}, key={Key})", hit.Score, cacheKey);
         return hit.Payload.TryGetValue("response", out var resp) ? resp.StringValue : null;
     }
 
     public async Task StoreAsync(
-        float[] queryEmbedding,
-        string query,
-        string response,
-        string tenantId,
-        CancellationToken ct)
+        float[] queryEmbedding, string query, string response,
+        RetrievalScope scope, CancellationToken ct)
     {
         if (!_opts.Enabled) return;
 
         await EnsureCollectionAsync(ct);
 
+        var cacheKey = CacheKey(scope);
         var expireAt = DateTimeOffset.UtcNow.AddMinutes(_opts.TtlMinutes).ToUnixTimeSeconds();
         var point = new PointStruct
         {
-            Id = new PointId { Uuid = Guid.NewGuid().ToString() },
+            Id      = new PointId { Uuid = Guid.NewGuid().ToString() },
             Vectors = queryEmbedding
         };
-        point.Payload["tenant_id"] = tenantId;
+        point.Payload["cache_key"] = cacheKey;
         point.Payload["query"]     = query;
         point.Payload["response"]  = response;
-        point.Payload["model"]     = "gpt-4o";
         point.Payload["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         point.Payload["expire_at"] = expireAt;
 
         await _client.UpsertAsync(Collection, [point], cancellationToken: ct);
-        _logger.LogInformation("Cache STORED (ttl={Ttl}min, expires={Exp}, tenant={Tenant})",
-            _opts.TtlMinutes, DateTimeOffset.FromUnixTimeSeconds(expireAt).ToString("HH:mm:ss"), tenantId);
+        _logger.LogInformation("Cache STORED (ttl={Ttl}min, key={Key})",
+            _opts.TtlMinutes, cacheKey);
     }
+
+    private static string CacheKey(RetrievalScope scope) =>
+        scope.Mode == ScopeMode.Private && scope.UserId is not null
+            ? $"{scope.TenantId}:private:{scope.UserId}"
+            : $"{scope.TenantId}:shared";
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
     {
@@ -115,7 +112,7 @@ public sealed class QdrantSemanticCache : ISemanticCache
 
             await _client.CreatePayloadIndexAsync(
                 Collection,
-                "tenant_id",
+                "cache_key",
                 PayloadSchemaType.Keyword,
                 cancellationToken: ct);
         }

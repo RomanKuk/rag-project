@@ -1,25 +1,34 @@
-import { Component, inject, viewChild } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
-import { FormsModule } from '@angular/forms';
+import { Component, inject, viewChild, computed } from '@angular/core';
+import { RouterOutlet, RouterLink, Router, NavigationEnd } from '@angular/router';
+import { filter, map } from 'rxjs';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { DocumentUploadComponent } from './components/document-upload/document-upload.component';
 import { DocumentListComponent } from './components/document-list/document-list.component';
-import { ApiKeyService } from './services/api-key.service';
+import { AuthService } from './services/auth.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, FormsModule, DocumentUploadComponent, DocumentListComponent],
+  imports: [RouterOutlet, RouterLink, DocumentUploadComponent, DocumentListComponent],
   templateUrl: './app.component.html',
 })
 export class AppComponent {
-  private readonly apiKeyService = inject(ApiKeyService);
+  readonly auth = inject(AuthService);
+  private readonly router  = inject(Router);
   private readonly docList = viewChild(DocumentListComponent);
 
-  apiKey = this.apiKeyService.apiKey;
+  private readonly _url = toSignal(
+    this.router.events.pipe(
+      filter(e => e instanceof NavigationEnd),
+      map(e => (e as NavigationEnd).urlAfterRedirects)
+    ),
+    { initialValue: this.router.url }
+  );
 
-  onApiKeyChange(value: string): void {
-    this.apiKeyService.set(value);
-  }
+  showShell = computed(() => {
+    const url = this._url();
+    return !url.startsWith('/login') && !url.startsWith('/admin') && !url.startsWith('/owner');
+  });
 
   onUploaded(): void {
     this.docList()?.load();

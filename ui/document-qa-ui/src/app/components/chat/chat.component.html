@@ -1,11 +1,13 @@
 <div class="chat-container">
   <div class="chat-toolbar">
-    <label class="agent-toggle">
-      <input type="checkbox"
-             [checked]="useAgent()"
-             (change)="useAgent.set($any($event.target).checked)">
-      Agent mode
-    </label>
+    @if (auth.isLoggedIn()) {
+      <label class="agent-toggle private-toggle">
+        <input type="checkbox"
+               [checked]="usePrivate()"
+               (change)="usePrivate.set($any($event.target).checked)">
+        Private docs
+      </label>
+    }
     @if (messages().length > 0) {
       <button class="btn-clear" (click)="clearHistory()">Clear</button>
     }
@@ -46,9 +48,7 @@
               @if (msg.cacheHit) {
                 <span class="meta-tag cache">cached</span>
               }
-              @if (useAgent()) {
-                <span class="meta-tag agent">agent</span>
-              }
+              <span class="meta-tag agent">agent</span>
               @if (msg.model) {
                 <span class="meta-tag model">{{ formatModel(msg.model) }}</span>
               }

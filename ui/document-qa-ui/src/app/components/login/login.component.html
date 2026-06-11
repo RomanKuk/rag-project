@@ -1,0 +1,27 @@
+<div class="login-page">
+  <div class="login-card">
+    <h1>Document Q&A</h1>
+    <p class="subtitle">Sign in to your workspace</p>
+
+    <form (ngSubmit)="onSubmit()" class="login-form">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" [value]="email()" (input)="email.set($any($event.target).value)"
+               autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" [value]="password()" (input)="password.set($any($event.target).value)"
+               autocomplete="current-password" required>
+      </div>
+
+      @if (error()) {
+        <p class="error-msg">{{ error() }}</p>
+      }
+
+      <button type="submit" class="btn-login" [disabled]="loading()">
+        {{ loading() ? 'Signing in…' : 'Sign in' }}
+      </button>
+    </form>
+  </div>
+</div>

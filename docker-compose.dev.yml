@@ -1,4 +1,4 @@
-# Development-only: starts Qdrant so you can run `dotnet run` and `ng serve` locally.
+# Development-only: starts Qdrant + Postgres so you can run `dotnet run` and `ng serve` locally.
 # Usage: docker compose -f docker-compose.dev.yml up -d
 services:
   qdrant:
@@ -8,5 +8,17 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: documentqa
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
 volumes:
   qdrant_storage:
+  postgres_data:

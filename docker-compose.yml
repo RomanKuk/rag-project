@@ -6,6 +6,22 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: documentqa
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d documentqa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .
@@ -19,8 +35,17 @@ services:
       - Qdrant__Port=6334
       - OpenRouter__ApiKey=${OPENROUTER_API_KEY:-}
       - Redis__ConnectionString=${UPSTASH_REDIS_URL:-}
+      - Postgres__ConnectionString=Host=postgres;Port=5432;Database=documentqa;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - Jwt__Key=${JWT_KEY:-change-me-in-production-use-32-chars}
+      - Jwt__Issuer=DocumentQA
+      - Jwt__Audience=DocumentQA
+      - Admin__Email=${ADMIN_EMAIL:-admin@example.com}
+      - Admin__Password=${ADMIN_PASSWORD:-Admin1234!}
     depends_on:
-      - qdrant
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     restart: on-failure
 
   ui:
@@ -34,3 +59,4 @@ services:
 
 volumes:
   qdrant_storage:
+  postgres_data:

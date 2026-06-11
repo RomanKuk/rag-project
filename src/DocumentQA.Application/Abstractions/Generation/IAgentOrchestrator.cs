@@ -1,3 +1,4 @@
+using DocumentQA.Application.Models;
 using DocumentQA.Application.UseCases.AskQuestion;
 
 namespace DocumentQA.Application.Abstractions.Generation;
@@ -7,7 +8,7 @@ public interface IAgentOrchestrator
     IAsyncEnumerable<AskQuestionChunk> OrchestrateAsync(
         string question,
         string[] modelFallbackChain,
-        string tenantId,
+        RetrievalScope scope,
         IReadOnlyList<ConversationTurn>? history,
         CancellationToken ct);
 }

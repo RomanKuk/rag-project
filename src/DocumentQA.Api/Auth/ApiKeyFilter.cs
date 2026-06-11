@@ -21,6 +21,14 @@ public sealed class ApiKeyFilter(IConfiguration config) : IEndpointFilter
     {
         var apiKeyMap = config.GetSection("ApiKeys").Get<Dictionary<string, string>>() ?? [];
 
+        // JWT-authenticated requests bypass the API key check entirely.
+        if (ctx.HttpContext.User?.Identity?.IsAuthenticated is true)
+        {
+            var anon = new TenantContext("jwt", PassThroughTier, "jwt");
+            ctx.HttpContext.Items[TenantContextItemKey] = anon;
+            return await next(ctx);
+        }
+
         // Auth is opt-in: if no keys are configured, pass through (dev mode / existing UI).
         if (apiKeyMap.Count == 0)
         {

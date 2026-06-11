@@ -1,3 +1,5 @@
+using DocumentQA.Domain.Identity;
+
 namespace DocumentQA.Domain.Documents;
 
 public sealed record ChunkMetadata
@@ -8,10 +10,10 @@ public sealed record ChunkMetadata
     public DateTimeOffset IngestedAt { get; init; } = DateTimeOffset.UtcNow;
     public string? Source { get; init; }
     public IReadOnlyList<string> Tags { get; init; } = [];
-    // Structural metadata — populated by StructuralChunker / IngestDocumentHandler
     public string? Section { get; init; }
     public string? DocumentType { get; init; }
     public string? DocumentDate { get; init; }
-    // Tenant isolation — scopes documents to the owning tenant
     public string TenantId { get; init; } = "public";
+    public DocumentVisibility Visibility { get; init; } = DocumentVisibility.Shared;
+    public string? OwnerUserId { get; init; }
 }

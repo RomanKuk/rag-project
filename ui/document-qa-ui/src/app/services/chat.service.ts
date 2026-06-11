@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { environment } from '../../environments/environment';
 import { HistoryEntry, SourceReference } from '../models/chat.models';
 import { ApiKeyService } from './api-key.service';
+import { AuthService } from './auth.service';
 
 interface ServerChunk {
   type: 'token' | 'sources' | 'no_context' | 'done' | 'tool_call';
@@ -26,23 +27,32 @@ export interface StreamEvent {
 
 @Injectable({ providedIn: 'root' })
 export class ChatService {
-  private readonly apiUrl = environment.apiUrl;
+  private readonly apiUrl        = environment.apiUrl;
   private readonly apiKeyService = inject(ApiKeyService);
+  private readonly authService   = inject(AuthService);
 
   async *streamAnswer(
     question: string,
-    options: { agent?: boolean; history?: HistoryEntry[] } = {}
+    options: { agent?: boolean; private?: boolean; history?: HistoryEntry[] } = {}
   ): AsyncGenerator<StreamEvent> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const key = this.apiKeyService.get();
-    if (key) headers['X-API-Key'] = key;
+
+    // JWT takes priority; fall back to X-API-Key for programmatic / eval use
+    const token = this.authService.token();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      const key = this.apiKeyService.get();
+      if (key) headers['X-API-Key'] = key;
+    }
 
     const response = await fetch(`${this.apiUrl}/api/chat`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         question,
-        agent: options.agent ?? false,
+        agent:   options.agent   ?? false,
+        private: options.private ?? false,
         history: options.history ?? [],
       }),
     });

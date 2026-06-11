@@ -3,11 +3,13 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocumentQA.Api.Auth;
 using DocumentQA.Api.Services;
+using DocumentQA.Application.Abstractions.Identity;
 using DocumentQA.Application.Abstractions.Security;
 using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.Models;
 using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.UseCases.AskQuestion;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
 namespace DocumentQA.Api.Endpoints;
@@ -16,13 +18,14 @@ public static class ChatEndpoints
 {
     public static void MapChatEndpoints(this WebApplication app) =>
         app.MapPost("/api/chat", async (
-            ChatRequest req,
+            [FromBody] ChatRequest req,
             AskQuestionHandler handler,
             IAgentOrchestrator orchestrator,
             IInputGuard guard,
             ISuspiciousActivityLog suspiciousLog,
             ITokenRateLimiter rateLimiter,
             IUsageTracker usageTracker,
+            ICurrentUser currentUser,
             LlmGate gate,
             StreamMetrics metrics,
             ILoggerFactory loggerFactory,
@@ -30,13 +33,17 @@ public static class ChatEndpoints
         {
             var logger = loggerFactory.CreateLogger("Api.Chat");
 
-            // ── Auth: resolve tenant context from filter ────────────────────
-            var tenantCtx = ctx.Items.TryGetValue(ApiKeyFilter.TenantContextItemKey, out var tc)
-                ? (TenantContext)tc!
-                : DefaultTenantContext;
-            var tier    = tenantCtx.Tier;
-            var apiKey  = tenantCtx.ApiKey;
-            var tenantId = tenantCtx.TenantId;
+            // ── Resolve scope: JWT > ApiKey fallback ────────────────────────
+            var scope  = DocumentsEndpoints.ResolveScope(currentUser, ctx, req.Private);
+            var apiKey = currentUser.IsAuthenticated ? currentUser.Email : "anonymous";
+            var userId = currentUser.IsAuthenticated ? currentUser.UserId : (Guid?)null;
+
+            // Resolve tier from ApiKey filter (used for rate limiting when not JWT-authed)
+            TierInfo tier;
+            if (ctx.Items.TryGetValue(ApiKeyFilter.TenantContextItemKey, out var tc) && tc is TenantContext tenantCtx)
+                tier = tenantCtx.Tier;
+            else
+                tier = DefaultTier;
 
             // ── Input validation ────────────────────────────────────────────
             var validation = guard.Validate(req.Question);
@@ -62,20 +69,13 @@ public static class ChatEndpoints
             }
 
             // ── Concurrency gate ────────────────────────────────────────────
-            try
-            {
-                await gate.AcquireAsync(ctx.RequestAborted);
-            }
-            catch (OperationCanceledException)
-            {
-                ctx.Response.StatusCode = 503;
-                return;
-            }
+            try { await gate.AcquireAsync(ctx.RequestAborted); }
+            catch (OperationCanceledException) { ctx.Response.StatusCode = 503; return; }
 
             // ── SSE setup ───────────────────────────────────────────────────
             ctx.Response.ContentType = "text/event-stream";
             ctx.Response.Headers.CacheControl = "no-cache";
-            ctx.Response.Headers.Connection = "keep-alive";
+            ctx.Response.Headers.Connection    = "keep-alive";
 
             var requestId = Guid.NewGuid().ToString();
             var start     = Stopwatch.GetTimestamp();
@@ -87,8 +87,8 @@ public static class ChatEndpoints
             {
                 var history = req.History?.Select(h => new ConversationTurn(h.Role, h.Content)).ToList();
                 var chunks = req.Agent
-                    ? orchestrator.OrchestrateAsync(req.Question, tier.Models, tenantId, history, ctx.RequestAborted)
-                    : handler.HandleAsync(req.Question, tier.Models, tenantId, ctx.RequestAborted);
+                    ? orchestrator.OrchestrateAsync(req.Question, tier.Models, scope, history, ctx.RequestAborted)
+                    : handler.HandleAsync(req.Question, tier.Models, scope, ctx.RequestAborted);
 
                 await foreach (var chunk in chunks)
                 {
@@ -100,12 +100,12 @@ public static class ChatEndpoints
                         var cost  = Pricing.Calculate(usage.Model, usage.InputTokens, usage.OutputTokens);
                         var doneEvent = new
                         {
-                            type         = "done",
-                            usage        = new { input_tokens = usage.InputTokens, output_tokens = usage.OutputTokens, model = usage.Model },
-                            cost_usd     = cost,
-                            cache_hit    = usage.CacheHit,
+                            type          = "done",
+                            usage         = new { input_tokens = usage.InputTokens, output_tokens = usage.OutputTokens, model = usage.Model },
+                            cost_usd      = cost,
+                            cache_hit     = usage.CacheHit,
                             fallback_used = usage.FallbackUsed,
-                            sources      = cachedSources ?? Array.Empty<Domain.Retrieval.Citation>(),
+                            sources       = cachedSources ?? Array.Empty<Domain.Retrieval.Citation>(),
                         };
                         await ctx.Response.WriteAsync(
                             $"data: {JsonSerializer.Serialize(doneEvent, JsonOpts)}\n\n",
@@ -114,9 +114,10 @@ public static class ChatEndpoints
 
                         var latencyMs = (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                         var record    = new UsageRecord(
-                            requestId, apiKey, tenantId, usage.Model,
+                            requestId, apiKey, scope.TenantId, usage.Model,
                             usage.InputTokens, usage.OutputTokens, cost,
-                            latencyMs, ttftMs, usage.CacheHit, usage.FallbackUsed);
+                            latencyMs, ttftMs, usage.CacheHit, usage.FallbackUsed,
+                            UserId: userId);
                         _ = Task.Run(async () =>
                         {
                             await usageTracker.LogAsync(record, CancellationToken.None);
@@ -158,19 +159,17 @@ public static class ChatEndpoints
         Models = ["gpt-4o"],
     };
 
-    private static readonly TenantContext DefaultTenantContext =
-        new("public", DefaultTier, "anonymous");
-
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        PropertyNamingPolicy      = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition    = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy   = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 }
 
 public sealed record ChatRequest(
     string Question,
-    bool Agent = false,
+    bool   Agent   = false,
+    bool   Private = false,
     IReadOnlyList<HistoryEntry>? History = null
 );
 

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
 using DocumentQA.Domain.Retrieval;
 using Microsoft.SemanticKernel;
@@ -13,7 +14,7 @@ public sealed class DocumentSearchPlugin(
     IVectorStore vectorStore,
     IReranker reranker,
     RagOptions options,
-    string tenantId,
+    RetrievalScope scope,
     List<Citation> citationSink)
 {
     [KernelFunction("search_documents")]
@@ -28,7 +29,7 @@ public sealed class DocumentSearchPlugin(
         var candidates = await vectorStore.SearchHybridAsync(
             queryVector, processed.Keywords,
             options.RetrievalTopK, options.MinRelevanceScore,
-            tenantId, cancellationToken);
+            scope, cancellationToken);
 
         if (candidates.Count == 0)
             return "No relevant documents found for this query.";

@@ -1,7 +1,29 @@
 import { Routes } from '@angular/router';
-import { ChatComponent } from './components/chat/chat.component';
+import { authGuard } from './guards/auth.guard';
+import { roleGuard } from './guards/role.guard';
 
 export const routes: Routes = [
-  { path: '', component: ChatComponent },
-  { path: '**', redirectTo: '' }
+  {
+    path: 'login',
+    loadComponent: () =>
+      import('./components/login/login.component').then(m => m.LoginComponent),
+  },
+  {
+    path: 'admin',
+    canActivate: [authGuard, roleGuard('Admin')],
+    loadComponent: () =>
+      import('./components/admin-dashboard/admin-dashboard.component').then(m => m.AdminDashboardComponent),
+  },
+  {
+    path: 'owner',
+    canActivate: [authGuard, roleGuard('Owner')],
+    loadComponent: () =>
+      import('./components/owner-portal/owner-portal.component').then(m => m.OwnerPortalComponent),
+  },
+  {
+    path: '',
+    loadComponent: () =>
+      import('./components/chat/chat.component').then(m => m.ChatComponent),
+  },
+  { path: '**', redirectTo: '' },
 ];

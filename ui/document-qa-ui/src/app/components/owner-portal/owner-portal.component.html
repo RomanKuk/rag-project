@@ -1,0 +1,80 @@
+<div class="owner-shell">
+  <header class="owner-header">
+    <span class="brand">Document Q&A — Owner Portal</span>
+    <div class="header-right">
+      <a routerLink="/" class="btn-chat">Go to chat</a>
+      <span class="user-badge">{{ auth.currentUser()?.displayName }} · {{ auth.currentUser()?.tenantSlug }}</span>
+      <button class="btn-logout" (click)="auth.logout()">Log out</button>
+    </div>
+  </header>
+
+  <main class="owner-main">
+
+    <!-- Upload shared documents -->
+    <section class="panel">
+      <h2>Shared documents</h2>
+      <p class="panel-hint">Documents uploaded here are visible to all members of your tenant.</p>
+
+      <label class="upload-btn">
+        <input type="file" accept=".pdf,.docx,.txt" (change)="onFileSelected($event)" hidden>
+        @if (uploadState() === 'uploading') {
+          <span>Uploading…</span>
+        } @else {
+          <span>Upload shared document</span>
+        }
+      </label>
+      @if (uploadMessage()) {
+        <p class="upload-msg" [class.error]="uploadState() === 'error'">{{ uploadMessage() }}</p>
+      }
+
+      @if (loadingDocs()) {
+        <p class="muted">Loading documents…</p>
+      } @else if (!documents().length) {
+        <p class="muted">No shared documents yet.</p>
+      } @else {
+        <ul class="doc-list">
+          @for (doc of documents(); track doc) {
+            <li>
+              <span>{{ doc }}</span>
+              <button class="btn-delete" (click)="deleteDoc(doc)">Delete</button>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+
+    <!-- Add member -->
+    <section class="panel">
+      <h2>Members</h2>
+      <form class="add-form" (ngSubmit)="addUser()">
+        <input placeholder="Email" type="email" [value]="newEmail()" (input)="newEmail.set($any($event.target).value)" required>
+        <input placeholder="Initial password" type="password" [value]="newPassword()" (input)="newPassword.set($any($event.target).value)" required>
+        <input placeholder="Display name (optional)" [value]="newDisplayName()" (input)="newDisplayName.set($any($event.target).value)">
+        <button type="submit" class="btn-primary">Add member</button>
+      </form>
+      @if (userError())   { <p class="error-msg">{{ userError() }}</p> }
+      @if (userSuccess()) { <p class="success-msg">{{ userSuccess() }}</p> }
+
+      @if (loadingUsers()) {
+        <p class="muted">Loading users…</p>
+      } @else {
+        <table class="user-table">
+          <thead>
+            <tr><th>Email</th><th>Name</th><th>Role</th><th>Joined</th></tr>
+          </thead>
+          <tbody>
+            @for (u of users(); track u.id) {
+              <tr>
+                <td>{{ u.email }}</td>
+                <td>{{ u.displayName }}</td>
+                <td><span class="role-badge" [class.owner]="u.role === 'Owner'">{{ u.role }}</span></td>
+                <td>{{ u.createdAt | date:'mediumDate' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+
+  </main>
+</div>

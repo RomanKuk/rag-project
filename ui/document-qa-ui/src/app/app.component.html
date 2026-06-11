@@ -1,35 +1,37 @@
-<div class="app-layout">
-  <header class="app-header">
-    <h1>Document Q&A</h1>
-    <div class="header-controls">
-      <input
-        class="api-key-input"
-        type="password"
-        placeholder="API key (optional)"
-        [value]="apiKey()"
-        (input)="onApiKeyChange($any($event.target).value)"
-        autocomplete="off">
-      <app-document-upload (uploaded)="onUploaded()" />
-    </div>
-  </header>
+@if (showShell()) {
+  <div class="app-layout">
+    <header class="app-header">
+      <h1>Document Q&A</h1>
+      <nav class="header-nav">
+        @if (auth.isLoggedIn()) {
+          @if (auth.role() === 'Owner') {
+            <a routerLink="/owner" class="nav-link">Owner portal</a>
+          }
+          <span class="user-badge">{{ auth.currentUser()?.displayName }}</span>
+          <button class="btn-nav" (click)="auth.logout()">Log out</button>
+        } @else {
+          <a routerLink="/login" class="nav-link">Sign in</a>
+        }
+        <app-document-upload (uploaded)="onUploaded()" />
+      </nav>
+    </header>
 
-  <div class="app-body">
-    <aside class="sidebar">
-      <p class="sidebar-title">Documents</p>
-      <app-document-list />
-    </aside>
-    <main class="app-main">
-      <router-outlet />
-    </main>
+    <div class="app-body">
+      <aside class="sidebar">
+        <p class="sidebar-title">Documents</p>
+        <app-document-list />
+      </aside>
+      <main class="app-main">
+        <router-outlet />
+      </main>
+    </div>
   </div>
-</div>
+} @else {
+  <router-outlet />
+}
 
 <style>
-  .app-layout {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-  }
+  .app-layout { display: flex; flex-direction: column; height: 100vh; }
 
   .app-header {
     display: flex;
@@ -42,17 +44,9 @@
     flex-shrink: 0;
   }
 
-  .app-header h1 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    white-space: nowrap;
-  }
+  .app-header h1 { font-size: 1.1rem; font-weight: 600; white-space: nowrap; }
 
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
+  .header-nav { display: flex; align-items: center; gap: 12px; }
 
   .api-key-input {
     padding: 5px 10px;
@@ -64,15 +58,33 @@
     width: 160px;
     outline: none;
   }
-
   .api-key-input::placeholder { color: rgba(255,255,255,0.4); }
   .api-key-input:focus { border-color: rgba(255,255,255,0.5); }
 
-  .app-body {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
+  .nav-link {
+    color: #a5b4fc;
+    font-size: 0.82rem;
+    text-decoration: none;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(165,180,252,0.3);
   }
+  .nav-link:hover { background: rgba(165,180,252,0.1); }
+
+  .user-badge { font-size: 0.82rem; color: rgba(255,255,255,0.6); }
+
+  .btn-nav {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: transparent;
+    color: #e2e8f0;
+    cursor: pointer;
+    font-size: 0.82rem;
+  }
+  .btn-nav:hover { background: rgba(255,255,255,0.07); }
+
+  .app-body { display: flex; flex: 1; overflow: hidden; }
 
   .sidebar {
     width: 220px;
@@ -91,8 +103,5 @@
     margin: 0 0 8px 4px;
   }
 
-  .app-main {
-    flex: 1;
-    overflow: hidden;
-  }
+  .app-main { flex: 1; overflow: hidden; }
 </style>

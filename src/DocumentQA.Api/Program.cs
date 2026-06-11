@@ -4,25 +4,34 @@ using DocumentQA.Api.Endpoints;
 using DocumentQA.Api.Services;
 using DocumentQA.Application.Abstractions.Cache;
 using DocumentQA.Application.Abstractions.Generation;
+using DocumentQA.Application.Abstractions.Identity;
 using DocumentQA.Application.Abstractions.Ingestion;
 using DocumentQA.Application.Abstractions.Retrieval;
 using DocumentQA.Application.Abstractions.Security;
 using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.Options;
+using DocumentQA.Application.UseCases.Admin;
 using DocumentQA.Application.UseCases.AskQuestion;
+using DocumentQA.Application.UseCases.Auth;
 using DocumentQA.Application.UseCases.IngestDocument;
+using DocumentQA.Application.UseCases.Owner;
 using DocumentQA.Infrastructure.Agent;
 using DocumentQA.Infrastructure.Cache;
 using DocumentQA.Infrastructure.Chunking;
 using DocumentQA.Infrastructure.Embeddings;
 using DocumentQA.Infrastructure.Generation;
+using DocumentQA.Infrastructure.Identity;
 using DocumentQA.Infrastructure.Parsing;
+using DocumentQA.Infrastructure.Persistence;
 using DocumentQA.Infrastructure.RateLimiting;
 using DocumentQA.Infrastructure.Retrieval;
 using DocumentQA.Infrastructure.Security;
 using DocumentQA.Infrastructure.Usage;
 using DocumentQA.Infrastructure.VectorStores;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.SemanticKernel;
 using OpenTelemetry.Trace;
 using Qdrant.Client;
@@ -30,18 +39,59 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Options ─────────────────────────────────────────────────────────────────
+// ── Options ──────────────────────────────────────────────────────────────────
 builder.Services.Configure<RagOptions>(builder.Configuration.GetSection("Rag"));
 builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection("Cache"));
 
-// ── CORS ─────────────────────────────────────────────────────────────────────
+// ── CORS ──────────────────────────────────────────────────────────────────────
 builder.Services.AddCors(o => o.AddPolicy("Angular", p =>
     p.WithOrigins("http://localhost:4200").AllowAnyHeader().AllowAnyMethod()));
 
-// ── Semantic Kernel — embeddings only (chat completion is handled per-call in OpenAIChatAdapter) ─
+// ── PostgreSQL + EF Core ──────────────────────────────────────────────────────
+var pgConn = builder.Configuration["Postgres:ConnectionString"]!;
+builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(pgConn));
+// Provide scoped AppDbContext via the factory (for EfUserRepository etc.)
+builder.Services.AddScoped(sp =>
+    sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
+
+// ── Identity ports + adapters ─────────────────────────────────────────────────
+builder.Services.AddScoped<IUserRepository,   EfUserRepository>();
+builder.Services.AddScoped<ITenantRepository, EfTenantRepository>();
+builder.Services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
+builder.Services.AddSingleton<IJwtTokenService, JwtTokenService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUser, CurrentUser>();
+
+// ── JWT Authentication + Authorization ───────────────────────────────────────
+var jwtKey = builder.Configuration["Jwt:Key"]!;
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(o =>
+    {
+        o.MapInboundClaims = false; // keep raw JWT claim names (e.g. "role", not the long URI)
+        o.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer           = true,
+            ValidateAudience         = true,
+            ValidateLifetime         = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer              = builder.Configuration["Jwt:Issuer"],
+            ValidAudience            = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey         = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            NameClaimType            = "email",
+            RoleClaimType            = "role",
+        };
+    });
+
+builder.Services.AddAuthorization(o =>
+{
+    o.AddPolicy("AdminOnly",    p => p.RequireClaim("role", "Admin"));
+    o.AddPolicy("OwnerOrAdmin", p => p.RequireClaim("role", "Owner", "Admin"));
+});
+
+// ── Semantic Kernel — embeddings ──────────────────────────────────────────────
 builder.Services.AddOpenAIEmbeddingGenerator(
     modelId: "text-embedding-3-small",
-    apiKey: builder.Configuration["OpenAI:ApiKey"]!,
+    apiKey:  builder.Configuration["OpenAI:ApiKey"]!,
     serviceId: "embeddings");
 
 // ── Qdrant ────────────────────────────────────────────────────────────────────
@@ -61,7 +111,7 @@ builder.Services.AddSingleton<StreamMetrics>();
 builder.Services.AddSingleton<IInputGuard, InputGuard>();
 builder.Services.AddSingleton<ISuspiciousActivityLog, SuspiciousActivityLogger>();
 
-// ── Auth filter ───────────────────────────────────────────────────────────────
+// ── Auth endpoint filter ──────────────────────────────────────────────────────
 builder.Services.AddTransient<ApiKeyFilter>();
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -77,13 +127,12 @@ else
     builder.Services.AddSingleton<ITokenRateLimiter, NullTokenRateLimiter>();
 }
 
-// ── Usage tracking ────────────────────────────────────────────────────────────
-var dbPath  = builder.Configuration["UsageDb:Path"] ?? "usage.db";
-var tracker = new SqliteUsageTracker(dbPath);
-await tracker.EnsureCreatedAsync();
-builder.Services.AddSingleton<IUsageTracker>(tracker);
+// ── Usage tracking (Postgres) ─────────────────────────────────────────────────
+builder.Services.AddSingleton<PostgresUsageTracker>();
+builder.Services.AddSingleton<IUsageTracker>(sp  => sp.GetRequiredService<PostgresUsageTracker>());
+builder.Services.AddSingleton<IUsageAnalytics>(sp => sp.GetRequiredService<PostgresUsageTracker>());
 
-// ── Generation (non-streaming utility port for query expansion + reranking) ───
+// ── Generation ────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ICompletionPort, OpenAICompletionAdapter>();
 
 // ── Ingestion ─────────────────────────────────────────────────────────────────
@@ -92,7 +141,6 @@ builder.Services.AddScoped<IDocumentParser, PdfParser>();
 builder.Services.AddScoped<IDocumentParser, DocxParser>();
 builder.Services.AddScoped<IDocumentParser, TxtParser>();
 
-// Chunking strategy: structural (default) or sliding window
 builder.Services.AddScoped<IChunkingStrategy>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
@@ -107,7 +155,6 @@ builder.Services.AddScoped<SlidingWindowChunker>();
 builder.Services.AddScoped<IEmbeddingPort, OpenAIEmbeddingAdapter>();
 builder.Services.AddScoped<IVectorStore, QdrantVectorStore>();
 
-// Query processor: LLM expansion (default) or pass-through
 builder.Services.AddScoped<IQueryProcessor>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
@@ -118,7 +165,6 @@ builder.Services.AddScoped<IQueryProcessor>(sp =>
 builder.Services.AddScoped<LlmQueryProcessor>();
 builder.Services.AddScoped<PassThroughQueryProcessor>();
 
-// Reranker: LLM (default) or identity
 builder.Services.AddScoped<IReranker>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
@@ -129,7 +175,7 @@ builder.Services.AddScoped<IReranker>(sp =>
 builder.Services.AddScoped<LlmReranker>();
 builder.Services.AddScoped<IdentityReranker>();
 
-// ── Generation ────────────────────────────────────────────────────────────────
+// ── Generation (chat, prompt, guardrail) ──────────────────────────────────────
 builder.Services.AddScoped<IPromptBuilder, TemplatePromptBuilder>();
 builder.Services.AddScoped<IChatCompletionPort, OpenAIChatAdapter>();
 builder.Services.AddScoped<IAnswerGuardrail, CitationPresenceGuardrail>();
@@ -140,11 +186,14 @@ builder.Services.AddScoped<ISemanticCache, QdrantSemanticCache>();
 // ── Use cases ─────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<AskQuestionHandler>();
 builder.Services.AddScoped<IngestDocumentHandler>();
+builder.Services.AddScoped<LoginHandler>();
+builder.Services.AddScoped<CreateTenantHandler>();
+builder.Services.AddScoped<CreateUserHandler>();
 
-// ── Agent orchestrator (SK-based, opt-in via "agent":true in chat request) ────
+// ── Agent orchestrator ────────────────────────────────────────────────────────
 builder.Services.AddScoped<IAgentOrchestrator, SemanticKernelOrchestrator>();
 
-// ── Observability (OpenTelemetry + optional Langfuse OTLP export) ─────────────
+// ── Observability ─────────────────────────────────────────────────────────────
 builder.Services.AddOpenTelemetry()
     .WithTracing(t =>
     {
@@ -154,32 +203,44 @@ builder.Services.AddOpenTelemetry()
         var lf = builder.Configuration.GetSection("Langfuse");
         if (lf.GetValue<bool>("Enabled"))
         {
-            var pub = lf["PublicKey"]!;
-            var sec = lf["SecretKey"]!;
-            var baseUrl = lf["BaseUrl"] ?? "https://cloud.langfuse.com";
+            var pub         = lf["PublicKey"]!;
+            var sec         = lf["SecretKey"]!;
+            var baseUrl     = lf["BaseUrl"] ?? "https://cloud.langfuse.com";
             var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{pub}:{sec}"));
 
             t.AddOtlpExporter(o =>
             {
                 o.Endpoint = new Uri($"{baseUrl}/api/public/otel");
-                o.Headers = $"Authorization=Basic {credentials}";
+                o.Headers  = $"Authorization=Basic {credentials}";
             });
         }
     });
 
 var app = builder.Build();
 
+// ── Startup: run migrations + seed admin ─────────────────────────────────────
+await AdminSeeder.SeedAsync(app.Services);
+
+// ── Middleware pipeline ───────────────────────────────────────────────────────
 app.UseCors("Angular");
+app.UseAuthentication();
+app.UseAuthorization();
+
+// ── Endpoints ─────────────────────────────────────────────────────────────────
+app.MapAuthEndpoints();
+app.MapAdminEndpoints();
+app.MapUsersEndpoints();
 app.MapDocumentsEndpoints();
 app.MapChatEndpoints();
 app.MapUsageEndpoints();
+
 app.MapGet("/health", (StreamMetrics m, LlmGate g) => Results.Ok(new
 {
-    status = "ok",
-    active_streams = m.Active,
-    aborted_streams = m.Aborted,
-    llm_slots_available = g.Available,
-    llm_slots_max = g.MaxConcurrent
+    status               = "ok",
+    active_streams       = m.Active,
+    aborted_streams      = m.Aborted,
+    llm_slots_available  = g.Available,
+    llm_slots_max        = g.MaxConcurrent
 }));
 
 app.Run();

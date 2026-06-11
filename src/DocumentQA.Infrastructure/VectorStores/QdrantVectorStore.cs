@@ -1,5 +1,7 @@
 using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Models;
 using DocumentQA.Domain.Documents;
+using DocumentQA.Domain.Identity;
 using DocumentQA.Domain.Retrieval;
 using Microsoft.Extensions.Logging;
 using Qdrant.Client;
@@ -10,9 +12,9 @@ namespace DocumentQA.Infrastructure.VectorStores;
 public sealed class QdrantVectorStore : IVectorStore
 {
     private const string CollectionName = "documents";
-    private const ulong VectorSize = 1536;
+    private const ulong  VectorSize     = 1536;
 
-    private readonly QdrantClient _client;
+    private readonly QdrantClient             _client;
     private readonly ILogger<QdrantVectorStore> _logger;
 
     public QdrantVectorStore(QdrantClient client, ILogger<QdrantVectorStore> logger)
@@ -24,7 +26,7 @@ public sealed class QdrantVectorStore : IVectorStore
     public async Task UpsertAsync(
         IReadOnlyList<DocumentChunk> chunks,
         IReadOnlyList<float[]> embeddings,
-        string tenantId,
+        RetrievalScope scope,
         CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
@@ -34,14 +36,16 @@ public sealed class QdrantVectorStore : IVectorStore
             var (chunk, vector) = pair;
             var point = new PointStruct
             {
-                Id = new PointId { Uuid = chunk.Id },
+                Id      = new PointId { Uuid = chunk.Id },
                 Vectors = vector
             };
-            point.Payload["tenant_id"]    = tenantId;
-            point.Payload["documentName"] = chunk.Metadata.DocumentName;
-            point.Payload["page"]         = chunk.Metadata.Page;
-            point.Payload["chunkIndex"]   = chunk.Metadata.ChunkIndex;
-            point.Payload["content"]      = chunk.Content;
+            point.Payload["tenant_id"]     = scope.TenantId;
+            point.Payload["visibility"]    = chunk.Metadata.Visibility.ToString().ToLowerInvariant();
+            point.Payload["owner_user_id"] = chunk.Metadata.OwnerUserId ?? string.Empty;
+            point.Payload["documentName"]  = chunk.Metadata.DocumentName;
+            point.Payload["page"]          = chunk.Metadata.Page;
+            point.Payload["chunkIndex"]    = chunk.Metadata.ChunkIndex;
+            point.Payload["content"]       = chunk.Content;
             if (chunk.Metadata.Section is { Length: > 0 } sec)
                 point.Payload["section"] = sec;
             if (chunk.Metadata.DocumentType is { Length: > 0 } dt)
@@ -52,23 +56,20 @@ public sealed class QdrantVectorStore : IVectorStore
         }).ToList();
 
         await _client.UpsertAsync(CollectionName, points, cancellationToken: ct);
-        _logger.LogInformation("Upserted {Count} points into '{Collection}' for tenant '{Tenant}'",
-            points.Count, CollectionName, tenantId);
+        _logger.LogInformation("Upserted {Count} points into '{Collection}' for tenant '{Tenant}' visibility={Vis}",
+            points.Count, CollectionName, scope.TenantId, scope.Mode);
     }
 
     public async Task<IReadOnlyList<RetrievedChunk>> SearchAsync(
-        float[] queryEmbedding,
-        int topK,
-        double minScore,
-        string tenantId,
-        CancellationToken ct)
+        float[] queryEmbedding, int topK, double minScore,
+        RetrievalScope scope, CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
 
         var results = await _client.SearchAsync(
             CollectionName,
             queryEmbedding,
-            filter: TenantFilter(tenantId),
+            filter: ScopeFilter(scope),
             limit: (ulong)topK,
             cancellationToken: ct);
 
@@ -80,27 +81,22 @@ public sealed class QdrantVectorStore : IVectorStore
             .Select(ToRetrievedChunk)
             .ToList();
 
-        _logger.LogInformation("{Kept}/{Total} chunks passed minScore={MinScore} (tenant={Tenant})",
-            filtered.Count, results.Count, minScore, tenantId);
+        _logger.LogInformation("{Kept}/{Total} chunks passed minScore={MinScore} (tenant={Tenant} mode={Mode})",
+            filtered.Count, results.Count, minScore, scope.TenantId, scope.Mode);
 
         return filtered;
     }
 
     public async Task<IReadOnlyList<RetrievedChunk>> SearchHybridAsync(
-        float[] dense,
-        IReadOnlyList<string> keywords,
-        int topK,
-        double minScore,
-        string tenantId,
-        CancellationToken ct)
+        float[] dense, IReadOnlyList<string> keywords, int topK, double minScore,
+        RetrievalScope scope, CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
 
-        // List A: dense semantic search with tenant + minScore filter
         var denseResults = await _client.SearchAsync(
             CollectionName,
             dense,
-            filter: TenantFilter(tenantId),
+            filter: ScopeFilter(scope),
             limit: (ulong)topK,
             cancellationToken: ct);
 
@@ -108,42 +104,29 @@ public sealed class QdrantVectorStore : IVectorStore
             .Where(r => r.Score >= (float)minScore && r.Payload.ContainsKey("content"))
             .ToList();
 
-        _logger.LogInformation("Dense search: {Count} results above minScore={MinScore} (tenant={Tenant})",
-            listA.Count, minScore, tenantId);
-
-        // List B: per-keyword filtered dense search (tenant-scoped)
         var keywordHits = new List<ScoredPoint>();
         foreach (var kw in keywords.Where(k => k.Length > 2))
         {
             try
             {
-                var filter = new Filter
+                var baseConditions = ScopeConditions(scope);
+                baseConditions.Add(new Condition
                 {
-                    Must =
+                    Field = new FieldCondition
                     {
-                        TenantCondition(tenantId),
-                        new Condition
-                        {
-                            Field = new FieldCondition
-                            {
-                                Key   = "content",
-                                Match = new Match { Text = kw }
-                            }
-                        }
+                        Key   = "content",
+                        Match = new Match { Text = kw }
                     }
-                };
+                });
+                var filter = new Filter();
+                foreach (var c in baseConditions) filter.Must.Add(c);
 
                 var kwResults = await _client.SearchAsync(
-                    CollectionName,
-                    dense,
-                    filter: filter,
-                    limit: (ulong)topK,
-                    cancellationToken: ct);
+                    CollectionName, dense, filter: filter,
+                    limit: (ulong)topK, cancellationToken: ct);
 
                 foreach (var r in kwResults.Where(r => r.Payload.ContainsKey("content")))
                     keywordHits.Add(r);
-
-                _logger.LogInformation("Keyword '{Kw}': {Count} hits", kw, kwResults.Count);
             }
             catch (Exception ex)
             {
@@ -151,10 +134,9 @@ public sealed class QdrantVectorStore : IVectorStore
             }
         }
 
-        // Fuse lists A + B with Reciprocal Rank Fusion (k=60)
-        const int rrfK = 60;
-        var scores    = new Dictionary<string, double>();
-        var pointById = new Dictionary<string, ScoredPoint>();
+        const int rrfK     = 60;
+        var scores          = new Dictionary<string, double>();
+        var pointById       = new Dictionary<string, ScoredPoint>();
 
         void AddRankScores(IList<ScoredPoint> list)
         {
@@ -176,24 +158,24 @@ public sealed class QdrantVectorStore : IVectorStore
             .ToList();
 
         _logger.LogInformation(
-            "Hybrid search (dense={DenseCount} + keyword hits={KwCount}) → {FusedCount} after RRF (tenant={Tenant})",
-            listA.Count, keywordHits.Count, fused.Count, tenantId);
+            "Hybrid search (dense={D} + kw={K}) → {F} after RRF (tenant={T} mode={M})",
+            listA.Count, keywordHits.Count, fused.Count, scope.TenantId, scope.Mode);
 
         return fused;
     }
 
-    public async Task<IReadOnlyList<string>> ListDocumentNamesAsync(string tenantId, CancellationToken ct)
+    public async Task<IReadOnlyList<string>> ListDocumentNamesAsync(RetrievalScope scope, CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
 
-        var names = new HashSet<string>();
+        var names  = new HashSet<string>();
         PointId? offset = null;
 
         while (true)
         {
             var response = await _client.ScrollAsync(
                 CollectionName,
-                filter: TenantFilter(tenantId),
+                filter: ScopeFilter(scope),
                 limit: 250,
                 offset: offset,
                 payloadSelector: true,
@@ -214,45 +196,84 @@ public sealed class QdrantVectorStore : IVectorStore
         return names.Order().ToList();
     }
 
-    public async Task DeleteDocumentAsync(string documentName, string tenantId, CancellationToken ct)
+    public async Task DeleteDocumentAsync(string documentName, RetrievalScope scope, CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
 
-        var filter = new Filter
+        var conditions = ScopeConditions(scope);
+        conditions.Add(new Condition
         {
-            Must =
+            Field = new FieldCondition
             {
-                TenantCondition(tenantId),
-                new Condition
-                {
-                    Field = new FieldCondition
-                    {
-                        Key   = "documentName",
-                        Match = new Match { Keyword = documentName }
-                    }
-                }
+                Key   = "documentName",
+                Match = new Match { Keyword = documentName }
             }
-        };
+        });
+        var filter = new Filter();
+        foreach (var c in conditions) filter.Must.Add(c);
 
         await _client.DeleteAsync(CollectionName, filter, cancellationToken: ct);
-        _logger.LogInformation("Deleted document '{Name}' for tenant '{Tenant}'", documentName, tenantId);
+        _logger.LogInformation("Deleted document '{Name}' for tenant '{Tenant}'", documentName, scope.TenantId);
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private static Condition TenantCondition(string tenantId) => new()
+    public async Task<long> CountDocumentsAsync(string tenantId, CancellationToken ct)
     {
-        Field = new FieldCondition
+        await EnsureCollectionAsync(ct);
+        var result = await _client.CountAsync(
+            CollectionName,
+            filter: TenantOnlyFilter(tenantId),
+            cancellationToken: ct);
+        return (long)result;
+    }
+
+    // ── Scope helpers ────────────────────────────────────────────────────────
+
+    private static List<Condition> ScopeConditions(RetrievalScope scope)
+    {
+        var conditions = new List<Condition>
         {
-            Key   = "tenant_id",
-            Match = new Match { Keyword = tenantId }
+            new() { Field = new FieldCondition { Key = "tenant_id", Match = new Match { Keyword = scope.TenantId } } }
+        };
+
+        if (scope.Mode == ScopeMode.Shared)
+        {
+            conditions.Add(new Condition
+            {
+                Field = new FieldCondition { Key = "visibility", Match = new Match { Keyword = "shared" } }
+            });
+        }
+        else if (scope.Mode == ScopeMode.Private && scope.UserId is not null)
+        {
+            conditions.Add(new Condition
+            {
+                Field = new FieldCondition { Key = "visibility", Match = new Match { Keyword = "private" } }
+            });
+            conditions.Add(new Condition
+            {
+                Field = new FieldCondition { Key = "owner_user_id", Match = new Match { Keyword = scope.UserId } }
+            });
+        }
+
+        return conditions;
+    }
+
+    private static Filter ScopeFilter(RetrievalScope scope)
+    {
+        var filter = new Filter();
+        foreach (var c in ScopeConditions(scope))
+            filter.Must.Add(c);
+        return filter;
+    }
+
+    private static Filter TenantOnlyFilter(string tenantId) => new()
+    {
+        Must =
+        {
+            new Condition { Field = new FieldCondition { Key = "tenant_id", Match = new Match { Keyword = tenantId } } }
         }
     };
 
-    private static Filter TenantFilter(string tenantId) => new()
-    {
-        Must = { TenantCondition(tenantId) }
-    };
+    // ── Mapping ──────────────────────────────────────────────────────────────
 
     private static RetrievedChunk ToRetrievedChunk(ScoredPoint r) =>
         new(
@@ -269,6 +290,9 @@ public sealed class QdrantVectorStore : IVectorStore
                     DocumentType = r.Payload.TryGetValue("documentType", out var dt)  ? dt.StringValue  : null,
                     DocumentDate = r.Payload.TryGetValue("documentDate", out var dd)  ? dd.StringValue  : null,
                     TenantId     = r.Payload.TryGetValue("tenant_id",   out var tid) ? tid.StringValue  : "public",
+                    Visibility   = r.Payload.TryGetValue("visibility",  out var vis) && vis.StringValue == "private"
+                        ? DocumentVisibility.Private : DocumentVisibility.Shared,
+                    OwnerUserId  = r.Payload.TryGetValue("owner_user_id", out var uid) ? uid.StringValue : null,
                 }
             },
             r.Score
@@ -276,6 +300,8 @@ public sealed class QdrantVectorStore : IVectorStore
 
     private static string GetString(IDictionary<string, Value> payload, string key)
         => payload.TryGetValue(key, out var v) ? v.StringValue : string.Empty;
+
+    // ── Collection bootstrap ─────────────────────────────────────────────────
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
     {
@@ -288,21 +314,11 @@ public sealed class QdrantVectorStore : IVectorStore
                 cancellationToken: ct);
             _logger.LogInformation("Created collection '{Collection}'", CollectionName);
 
-            // Full-text index for keyword filtering
-            await _client.CreatePayloadIndexAsync(
-                CollectionName,
-                "content",
-                PayloadSchemaType.Text,
-                cancellationToken: ct);
-            _logger.LogInformation("Created full-text index on 'content'");
-
-            // Keyword index for fast tenant isolation
-            await _client.CreatePayloadIndexAsync(
-                CollectionName,
-                "tenant_id",
-                PayloadSchemaType.Keyword,
-                cancellationToken: ct);
-            _logger.LogInformation("Created keyword index on 'tenant_id'");
+            await _client.CreatePayloadIndexAsync(CollectionName, "content",       PayloadSchemaType.Text,    cancellationToken: ct);
+            await _client.CreatePayloadIndexAsync(CollectionName, "tenant_id",     PayloadSchemaType.Keyword, cancellationToken: ct);
+            await _client.CreatePayloadIndexAsync(CollectionName, "visibility",    PayloadSchemaType.Keyword, cancellationToken: ct);
+            await _client.CreatePayloadIndexAsync(CollectionName, "owner_user_id", PayloadSchemaType.Keyword, cancellationToken: ct);
+            _logger.LogInformation("Created payload indexes on collection '{Collection}'", CollectionName);
         }
     }
 }

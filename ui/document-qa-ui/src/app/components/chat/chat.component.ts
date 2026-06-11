@@ -1,6 +1,7 @@
-import { Component, signal, ElementRef, viewChild, effect } from '@angular/core';
+import { Component, signal, ElementRef, viewChild, effect, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ChatService } from '../../services/chat.service';
+import { AuthService } from '../../services/auth.service';
 import { ChatMessage, HistoryEntry } from '../../models/chat.models';
 
 const TOOL_LABELS: Record<string, string> = {
@@ -16,10 +17,13 @@ const TOOL_LABELS: Record<string, string> = {
   styleUrl: './chat.component.scss'
 })
 export class ChatComponent {
-  messages   = signal<ChatMessage[]>([]);
-  question   = signal('');
-  isLoading  = signal(false);
-  useAgent   = signal(false);
+  messages    = signal<ChatMessage[]>([]);
+  question    = signal('');
+  isLoading   = signal(false);
+  readonly useAgent = true;
+  usePrivate  = signal(false);
+
+  readonly auth = inject(AuthService);
 
   private readonly scrollContainer = viewChild<ElementRef>('scrollContainer');
 
@@ -45,17 +49,15 @@ export class ChatComponent {
       { role: 'assistant', content: '', sources: [], isStreaming: true },
     ]);
 
-    // Build conversation history for multi-turn (agent mode only)
-    const history: HistoryEntry[] = this.useAgent()
-      ? this.messages()
-          .slice(0, assistantIndex)
-          .filter(m => m.content)
-          .map(m => ({ role: m.role, content: m.content }))
-      : [];
+    const history: HistoryEntry[] = this.messages()
+      .slice(0, assistantIndex)
+      .filter(m => m.content)
+      .map(m => ({ role: m.role, content: m.content }));
 
     try {
       for await (const event of this.chatService.streamAnswer(q, {
-        agent: this.useAgent(),
+        agent:   this.useAgent,
+        private: this.usePrivate(),
         history,
       })) {
         if (event.type === 'tool_call' && event.toolCall) {

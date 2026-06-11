@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Channels;
 using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.Abstractions.Retrieval;
+using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
 using DocumentQA.Application.UseCases.AskQuestion;
 using DocumentQA.Domain.Retrieval;
@@ -33,7 +34,7 @@ public sealed class SemanticKernelOrchestrator(
     public async IAsyncEnumerable<AskQuestionChunk> OrchestrateAsync(
         string question,
         string[] modelFallbackChain,
-        string tenantId,
+        RetrievalScope scope,
         IReadOnlyList<ConversationTurn>? priorHistory,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -41,7 +42,7 @@ public sealed class SemanticKernelOrchestrator(
         var toolEvents = Channel.CreateUnbounded<(string Tool, string Status)>();
 
         var model  = modelFallbackChain[0];
-        var kernel = BuildKernel(model, tenantId, citations, toolEvents);
+        var kernel = BuildKernel(model, scope, citations, toolEvents);
 
         var history = new ChatHistory();
         history.AddSystemMessage(SystemPrompt);
@@ -104,13 +105,12 @@ public sealed class SemanticKernelOrchestrator(
             Model: model));
     }
 
-    private Kernel BuildKernel(string model, string tenantId, List<Citation> citations,
+    private Kernel BuildKernel(string model, RetrievalScope scope, List<Citation> citations,
         Channel<(string, string)> toolEvents)
     {
         var options = ragOptions.Value;
         var builder = Kernel.CreateBuilder();
 
-        // Chat completion service (mirrors OpenAIChatAdapter config)
         var routerKey = config["OpenRouter:ApiKey"];
         if (!string.IsNullOrEmpty(routerKey))
         {
@@ -125,12 +125,11 @@ public sealed class SemanticKernelOrchestrator(
 
         var kernel = builder.Build();
 
-        // Plugins (tenant-scoped via closure)
         kernel.Plugins.AddFromObject(new DocumentSearchPlugin(
-            queryProcessor, embedding, vectorStore, reranker, options, tenantId, citations),
+            queryProcessor, embedding, vectorStore, reranker, options, scope, citations),
             "DocumentSearch");
         kernel.Plugins.AddFromObject(new SummarizePlugin(
-            queryProcessor, embedding, vectorStore, completion, options, tenantId),
+            queryProcessor, embedding, vectorStore, completion, options, scope),
             "Summarize");
 
         // Invocation filter to emit tool_call SSE events
