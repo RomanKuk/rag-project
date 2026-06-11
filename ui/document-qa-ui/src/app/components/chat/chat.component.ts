@@ -1,10 +1,12 @@
-import { Component, signal, ElementRef, viewChild, effect, inject, OnInit } from '@angular/core';
+import { Component, signal, ElementRef, viewChild, effect, inject, OnInit, DestroyRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterModule } from '@angular/router';
-import { ChatService } from '../../services/chat.service';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ChatService, ChatStreamError } from '../../services/chat.service';
 import { AuthService } from '../../services/auth.service';
 import { ChatSessionService } from '../../services/chat-session.service';
 import { ChatMessage, HistoryEntry } from '../../models/chat.models';
+import { MarkdownPipe } from '../../pipes/markdown.pipe';
 
 const TOOL_LABELS: Record<string, string> = {
   search_documents: 'Searching documents',
@@ -14,20 +16,28 @@ const TOOL_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [FormsModule, RouterModule],
+  imports: [FormsModule, RouterModule, MarkdownPipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.scss'
 })
 export class ChatComponent implements OnInit {
-  messages    = signal<ChatMessage[]>([]);
-  question    = signal('');
-  isLoading   = signal(false);
-  sessionId   = signal<string | null>(null);
+  messages       = signal<ChatMessage[]>([]);
+  question       = signal('');
+  isLoading      = signal(false);
+  historyLoading = signal(false);
+  sessionId      = signal<string | null>(null);
+
+  // Chat-scoped document panel
+  showDocs     = signal(false);
+  docs         = signal<string[]>([]);
+  docUploading = signal(false);
+  docError     = signal('');
 
   readonly auth           = inject(AuthService);
   private readonly chatService    = inject(ChatService);
   private readonly sessionService = inject(ChatSessionService);
   private readonly route          = inject(ActivatedRoute);
+  private readonly destroyRef     = inject(DestroyRef);
 
   private readonly scrollContainer = viewChild<ElementRef>('scrollContainer');
 
@@ -40,32 +50,88 @@ export class ChatComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    this.route.queryParamMap.subscribe(params => {
-      const sid = params.get('session');
-      if (sid && sid !== this.sessionId()) {
-        this.sessionId.set(sid);
-        this.loadHistory(sid);
-      } else if (!sid && this.sessionId()) {
-        this.sessionId.set(null);
-        this.messages.set([]);
-      }
-    });
+    this.route.queryParamMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(params => {
+        const sid = params.get('session');
+        if (sid && sid !== this.sessionId()) {
+          this.sessionId.set(sid);
+          this.showDocs.set(false);
+          this.loadHistory(sid);
+          this.loadDocs(sid);
+        } else if (!sid && this.sessionId()) {
+          this.sessionId.set(null);
+          this.messages.set([]);
+          this.docs.set([]);
+        }
+      });
   }
 
   private async loadHistory(sessionId: string): Promise<void> {
+    this.historyLoading.set(true);
     try {
       const session = await this.sessionService.get(sessionId);
       const msgs: ChatMessage[] = session.messages.map(m => ({
-        role:    m.role,
-        content: m.content,
-        sources: m.sourcesJson ? JSON.parse(m.sourcesJson) : [],
-        costUsd: m.costUsd > 0 ? m.costUsd : undefined,
+        role:      m.role,
+        content:   m.content,
+        sources:   m.sourcesJson ? JSON.parse(m.sourcesJson) : [],
+        costUsd:   m.costUsd > 0 ? m.costUsd : undefined,
+        messageId: m.role === 'assistant' ? m.id : undefined,
       }));
       this.messages.set(msgs);
     } catch {
       this.messages.set([]);
+    } finally {
+      this.historyLoading.set(false);
     }
   }
+
+  // ── Chat-scoped documents ────────────────────────────────────────────────
+
+  toggleDocs(): void {
+    this.showDocs.update(v => !v);
+  }
+
+  private async loadDocs(sessionId: string): Promise<void> {
+    try {
+      this.docs.set(await this.sessionService.listDocuments(sessionId));
+    } catch {
+      this.docs.set([]);
+    }
+  }
+
+  async onDocSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file  = input.files?.[0];
+    const sid   = this.sessionId();
+    if (!file || !sid) return;
+
+    this.docUploading.set(true);
+    this.docError.set('');
+    try {
+      await this.sessionService.uploadDocument(sid, file);
+      await this.loadDocs(sid);
+    } catch {
+      this.docError.set(`Upload failed for "${file.name}".`);
+    } finally {
+      this.docUploading.set(false);
+      input.value = '';
+    }
+  }
+
+  async deleteDoc(name: string): Promise<void> {
+    const sid = this.sessionId();
+    if (!sid) return;
+    if (!confirm(`Remove "${name}" from this chat?`)) return;
+    try {
+      await this.sessionService.deleteDocument(sid, name);
+      await this.loadDocs(sid);
+    } catch {
+      this.docError.set(`Could not delete "${name}".`);
+    }
+  }
+
+  // ── Messaging ────────────────────────────────────────────────────────────
 
   async sendMessage(): Promise<void> {
     const q = this.question().trim();
@@ -93,6 +159,13 @@ export class ChatComponent implements OnInit {
       .filter(m => m.content)
       .map(m => ({ role: m.role, content: m.content }));
 
+    const patch = (update: Partial<ChatMessage>) =>
+      this.messages.update(msgs => {
+        const updated = [...msgs];
+        updated[assistantIndex] = { ...updated[assistantIndex], ...update };
+        return updated;
+      });
+
     try {
       for await (const event of this.chatService.streamAnswer(q, {
         agent:     true,
@@ -103,78 +176,60 @@ export class ChatComponent implements OnInit {
           const label = event.toolCall.status === 'running'
             ? (TOOL_LABELS[event.toolCall.tool] ?? event.toolCall.tool) + '…'
             : null;
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[assistantIndex] = { ...updated[assistantIndex], activeToolCall: label ?? undefined };
-            return updated;
-          });
+          patch({ activeToolCall: label ?? undefined });
         } else if (event.type === 'sources' && event.sources) {
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              sources: event.sources!,
-              activeToolCall: undefined,
-            };
-            return updated;
-          });
+          patch({ sources: event.sources, activeToolCall: undefined });
         } else if (event.type === 'token' && event.token) {
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              content: updated[assistantIndex].content + event.token,
-              activeToolCall: undefined,
-            };
-            return updated;
+          patch({
+            content: this.messages()[assistantIndex].content + event.token,
+            activeToolCall: undefined,
           });
         } else if (event.type === 'no_context') {
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              content: 'No relevant documents found to answer your question.',
-              activeToolCall: undefined,
-            };
-            return updated;
+          patch({
+            content: 'No relevant documents found to answer your question.',
+            activeToolCall: undefined,
           });
         } else if (event.type === 'done') {
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              costUsd:  event.cost_usd,
-              cacheHit: event.cache_hit,
-              model:    event.usage?.model,
-            };
-            return updated;
+          patch({
+            costUsd:   event.cost_usd,
+            cacheHit:  event.cache_hit,
+            model:     event.usage?.model,
+            messageId: event.message_id,
           });
         }
       }
-    } catch {
-      this.messages.update(msgs => {
-        const updated = [...msgs];
-        updated[assistantIndex] = {
-          ...updated[assistantIndex],
-          content: 'Error: could not reach the API. Make sure the backend is running.',
-          activeToolCall: undefined,
-        };
-        return updated;
-      });
+    } catch (err) {
+      patch({ content: this.describeStreamError(err), activeToolCall: undefined });
+      if (err instanceof ChatStreamError && err.status === 401) {
+        setTimeout(() => this.auth.logout(), 2500);
+      }
     } finally {
-      this.messages.update(msgs => {
-        const updated = [...msgs];
-        updated[assistantIndex] = { ...updated[assistantIndex], isStreaming: false, activeToolCall: undefined };
-        return updated;
-      });
+      patch({ isStreaming: false, activeToolCall: undefined });
       this.isLoading.set(false);
     }
   }
 
+  private describeStreamError(err: unknown): string {
+    if (err instanceof ChatStreamError) {
+      if (err.status === 429) {
+        const limit = err.body?.limit
+          ? ` The daily limit is ${err.body.limit.toLocaleString()} tokens.`
+          : '';
+        return `Daily token quota exceeded.${limit} Quota resets at midnight UTC.`;
+      }
+      if (err.status === 401) {
+        return 'Your session has expired — redirecting to login…';
+      }
+      return err.body?.error ?? `The server rejected the request (HTTP ${err.status}).`;
+    }
+    return 'Error: could not reach the API. Make sure the backend is running.';
+  }
+
   async sendFeedback(msgIndex: number, rating: 1 | -1): Promise<void> {
     const msg = this.messages()[msgIndex];
-    if (!msg || msg.role !== 'assistant') return;
+    if (!msg || msg.role !== 'assistant' || msg.feedbackSent) return;
 
+    const previous = msg.feedback;
     this.messages.update(msgs => {
       const updated = [...msgs];
       updated[msgIndex] = { ...updated[msgIndex], feedback: rating };
@@ -183,8 +238,18 @@ export class ChatComponent implements OnInit {
 
     try {
       await this.chatService.sendFeedback(msg.messageId ?? null, rating);
+      this.messages.update(msgs => {
+        const updated = [...msgs];
+        updated[msgIndex] = { ...updated[msgIndex], feedbackSent: true };
+        return updated;
+      });
     } catch {
-      // non-critical — silently ignore
+      // revert on failure so the user can retry
+      this.messages.update(msgs => {
+        const updated = [...msgs];
+        updated[msgIndex] = { ...updated[msgIndex], feedback: previous };
+        return updated;
+      });
     }
   }
 

@@ -35,6 +35,7 @@ public sealed class AskQuestionHandler
     private readonly IAnswerGuardrail _citationGuardrail;
     private readonly IGroundednessCheck _groundednessCheck;
     private readonly ISafetyFilter _safetyFilter;
+    private readonly ITokenCounter _tokenCounter;
     private readonly RagOptions _options;
     private readonly ILogger<AskQuestionHandler> _logger;
 
@@ -50,6 +51,7 @@ public sealed class AskQuestionHandler
         IAnswerGuardrail citationGuardrail,
         IGroundednessCheck groundednessCheck,
         ISafetyFilter safetyFilter,
+        ITokenCounter tokenCounter,
         IOptions<RagOptions> options,
         ILogger<AskQuestionHandler> logger)
     {
@@ -64,6 +66,7 @@ public sealed class AskQuestionHandler
         _citationGuardrail  = citationGuardrail;
         _groundednessCheck  = groundednessCheck;
         _safetyFilter       = safetyFilter;
+        _tokenCounter       = tokenCounter;
         _options            = options.Value;
         _logger             = logger;
     }
@@ -79,27 +82,21 @@ public sealed class AskQuestionHandler
         rootActivity?.SetTag("tenant", scope.TenantId);
         rootActivity?.SetTag("scope.mode", scope.Mode.ToString());
 
-        // ── Embed (one call — reused for both cache and RAG) ──────────────
-        float[] queryVector;
-        ProcessedQuery processed;
+        // ── Embed the RAW question first — used for the cache key ─────────
+        // Order matters for cost: a cache hit must not pay the query-processor
+        // LLM call, so expansion runs only after a cache miss.
+        float[] rawVector;
         using (var embedActivity = RagActivitySource.Source.StartActivity("embed-query"))
         {
-            processed = await _queryProcessor.ProcessAsync(question, ct);
-            queryVector = await _embedding.EmbedAsync(processed.SearchText, ct);
-            embedActivity?.SetTag("embedding.dims", queryVector.Length);
-            embedActivity?.SetTag("keywords.count", processed.Keywords.Count);
-            embedActivity?.SetTag("intent", processed.Intent);
-            embedActivity?.SetTag("sub_queries.count", processed.SubQueries.Count);
-            _logger.LogInformation(
-                "Embedding generated ({Dims} dims), {KwCount} keywords, intent={Intent}, subQueries={SqCount}",
-                queryVector.Length, processed.Keywords.Count, processed.Intent, processed.SubQueries.Count);
+            rawVector = await _embedding.EmbedAsync(question, ct);
+            embedActivity?.SetTag("embedding.dims", rawVector.Length);
         }
 
         // ── Semantic cache lookup ─────────────────────────────────────────
         string? cached;
         using (var cacheActivity = RagActivitySource.Source.StartActivity("cache-check"))
         {
-            cached = await _cache.TryGetAsync(queryVector, scope, ct);
+            cached = await _cache.TryGetAsync(rawVector, scope, ct);
             var hit = cached is not null;
             cacheActivity?.SetTag("cache.hit", hit);
             rootActivity?.SetTag("cache.hit", hit);
@@ -110,10 +107,27 @@ public sealed class AskQuestionHandler
             foreach (var token in SplitIntoTokens(cached))
                 yield return AskQuestionChunk.OfToken(token);
             yield return AskQuestionChunk.Done(new UsageSummary(
-                question.Length / 4, cached.Length / 4,
+                _tokenCounter.Count(question), _tokenCounter.Count(cached),
                 CacheHit: true, FallbackUsed: false,
                 Model: modelFallbackChain[0]));
             yield break;
+        }
+
+        // ── Query processing (cache miss only — this may cost an LLM call) ─
+        ProcessedQuery processed;
+        float[] queryVector;
+        using (var processActivity = RagActivitySource.Source.StartActivity("query-processing"))
+        {
+            processed = await _queryProcessor.ProcessAsync(question, ct);
+            queryVector = processed.SearchText == question
+                ? rawVector
+                : await _embedding.EmbedAsync(processed.SearchText, ct);
+            processActivity?.SetTag("keywords.count", processed.Keywords.Count);
+            processActivity?.SetTag("intent", processed.Intent);
+            processActivity?.SetTag("sub_queries.count", processed.SubQueries.Count);
+            _logger.LogInformation(
+                "Query processed: {KwCount} keywords, intent={Intent}, subQueries={SqCount}",
+                processed.Keywords.Count, processed.Intent, processed.SubQueries.Count);
         }
 
         // ── Vector search (multi-query if sub-queries present) ────────────
@@ -131,8 +145,13 @@ public sealed class AskQuestionHandler
             yield break;
         }
 
-        var ranked = await _reranker.RerankAsync(
-            question, candidates, _options.RerankTopN, ct);
+        IReadOnlyList<Domain.Retrieval.RetrievedChunk> ranked;
+        using (var rerankActivity = RagActivitySource.Source.StartActivity("rerank"))
+        {
+            rerankActivity?.SetTag("candidates.in", candidates.Count);
+            ranked = await _reranker.RerankAsync(question, candidates, _options.RerankTopN, ct);
+            rerankActivity?.SetTag("candidates.out", ranked.Count);
+        }
 
         var prompt = _promptBuilder.Build(question, ranked);
         yield return AskQuestionChunk.OfSources(prompt.Sources);
@@ -212,15 +231,33 @@ public sealed class AskQuestionHandler
             response += "\n\n⚠️ Note: The answer may not be fully supported by the retrieved documents.";
         }
 
-        // ── Groundedness check (fire-and-forget enrichment of telemetry) ──
-        _ = Task.Run(async () =>
+        // ── Groundedness check (config-gated — costs one LLM call) ────────
+        if (_options.GroundednessEnabled)
         {
-            var groundedness = await _groundednessCheck.CheckAsync(response, ranked, CancellationToken.None);
-            _logger.LogInformation("Groundedness: {Grounded}", groundedness.IsGrounded);
-        });
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var groundActivity = RagActivitySource.Source.StartActivity("groundedness-check");
+                    var groundedness = await _groundednessCheck.CheckAsync(response, ranked, CancellationToken.None);
+                    groundActivity?.SetTag("grounded", groundedness.IsGrounded);
+                    _logger.LogInformation("Groundedness: {Grounded}", groundedness.IsGrounded);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Groundedness check failed");
+                }
+            });
+        }
 
         // ── Safety filter on output ───────────────────────────────────────
-        var outputSafety = await _safetyFilter.CheckAsync(response, ct);
+        SafetyResult outputSafety;
+        using (var safetyActivity = RagActivitySource.Source.StartActivity("safety-filter"))
+        {
+            outputSafety = await _safetyFilter.CheckAsync(response, ct);
+            safetyActivity?.SetTag("flagged", !outputSafety.IsSafe);
+            safetyActivity?.SetTag("category", outputSafety.Category);
+        }
         rootActivity?.SetTag("safety.output.passed", outputSafety.IsSafe);
         if (!outputSafety.IsSafe)
         {
@@ -229,19 +266,22 @@ public sealed class AskQuestionHandler
         }
 
         // ── Yield usage summary ───────────────────────────────────────────
-        var inputTokens  = (prompt.SystemPrompt.Length + prompt.UserPrompt.Length) / 4;
-        var outputTokens = response.Length / 4;
+        var inputTokens  = _tokenCounter.Count(prompt.SystemPrompt) + _tokenCounter.Count(prompt.UserPrompt);
+        var outputTokens = _tokenCounter.Count(response);
+        rootActivity?.SetTag("input_tokens", inputTokens);
+        rootActivity?.SetTag("output_tokens", outputTokens);
         yield return AskQuestionChunk.Done(new UsageSummary(
             inputTokens, outputTokens,
             CacheHit: false, FallbackUsed: fallbackUsed,
             Model: usedModel));
 
         // ── Cache store (fire-and-forget, don't fail the response) ────────
+        // Keyed by the RAW question vector — must match the lookup above.
         // Skip caching "I cannot find" answers — caching them would cause all
         // semantically similar follow-up queries to receive the same null answer.
         const string NoInfoPhrase = "I cannot find this information";
         if (!response.Contains(NoInfoPhrase, StringComparison.OrdinalIgnoreCase))
-            _ = _cache.StoreAsync(queryVector, question, response, scope, CancellationToken.None)
+            _ = _cache.StoreAsync(rawVector, question, response, scope, CancellationToken.None)
                   .ContinueWith(t => _logger.LogWarning(t.Exception, "Cache store failed"),
                       TaskContinuationOptions.OnlyOnFaulted);
     }
@@ -273,7 +313,8 @@ public sealed class AskQuestionHandler
 
         var allById = primary.ToDictionary(c => c.Chunk.Id);
 
-        // Sub-query retrieval (if any)
+        // Sub-query retrieval (if any) — each costs one extra embedding call
+        var subIndex = 0;
         foreach (var subQuery in processed.SubQueries.Take(3))
         {
             try
@@ -284,12 +325,15 @@ public sealed class AskQuestionHandler
 
                 foreach (var r in subResults)
                     allById.TryAdd(r.Chunk.Id, r);
+                activity?.SetTag($"sub_query.{subIndex}.results", subResults.Count);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Sub-query retrieval failed for '{SubQuery}'", subQuery);
             }
+            subIndex++;
         }
+        activity?.SetTag("embedding.extra_calls", subIndex);
 
         activity?.SetTag("results.count", allById.Count);
         return allById.Values.ToList();

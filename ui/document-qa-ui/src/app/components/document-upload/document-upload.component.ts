@@ -1,4 +1,5 @@
-import { Component, EventEmitter, Output, signal } from '@angular/core';
+import { Component, EventEmitter, Output, signal, inject, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { DocumentService } from '../../services/document.service';
 
 type UploadState = 'idle' | 'uploading' | 'success' | 'error';
@@ -15,6 +16,8 @@ export class DocumentUploadComponent {
   state   = signal<UploadState>('idle');
   message = signal('');
 
+  private readonly destroyRef = inject(DestroyRef);
+
   constructor(private readonly documentService: DocumentService) {}
 
   onFileSelected(event: Event): void {
@@ -25,7 +28,7 @@ export class DocumentUploadComponent {
     this.state.set('uploading');
     this.message.set(`Uploading ${file.name}...`);
 
-    this.documentService.upload(file).subscribe({
+    this.documentService.upload(file).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: (res) => {
         this.state.set('success');
         this.message.set(`"${res.file}" ingested (${res.chunks} chunks).`);

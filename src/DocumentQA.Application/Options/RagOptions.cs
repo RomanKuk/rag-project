@@ -43,4 +43,10 @@ public sealed class RagOptions
     // Configurable embedding model
     public string EmbeddingModel      { get; init; } = "text-embedding-3-small";
     public int    EmbeddingDimensions { get; init; } = 1536;
+
+    // Per-minute token budget for JWT users (no API-key tier applies)
+    public int JwtTokensPerMinute { get; init; } = 20_000;
+
+    // Post-generation LLM entailment check — one extra LLM call per response
+    public bool GroundednessEnabled { get; init; } = false;
 }

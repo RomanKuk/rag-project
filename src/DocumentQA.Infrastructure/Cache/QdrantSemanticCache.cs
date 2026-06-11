@@ -95,26 +95,50 @@ public sealed class QdrantSemanticCache : ISemanticCache
             _opts.TtlMinutes, cacheKey);
     }
 
-    private static string CacheKey(RetrievalScope scope) =>
-        scope.Mode == ScopeMode.Private && scope.UserId is not null
-            ? $"{scope.TenantId}:private:{scope.UserId}"
-            : $"{scope.TenantId}:shared";
+    // Chat scope gets its own key: answers derived from chat-private documents
+    // must never be served to other users via the shared cache.
+    private static string CacheKey(RetrievalScope scope) => scope.Mode switch
+    {
+        ScopeMode.Chat when scope.ChatId is not null
+            => $"{scope.TenantId}:chat:{scope.ChatId}",
+        ScopeMode.Private when scope.UserId is not null
+            => $"{scope.TenantId}:private:{scope.UserId}",
+        _   => $"{scope.TenantId}:shared",
+    };
+
+    // Process-wide guard — see QdrantVectorStore for rationale.
+    private static volatile bool _collectionReady;
+    private static readonly SemaphoreSlim InitLock = new(1, 1);
 
     private async Task EnsureCollectionAsync(CancellationToken ct)
     {
-        var existing = await _client.ListCollectionsAsync(ct);
-        if (!existing.Contains(Collection))
-        {
-            await _client.CreateCollectionAsync(
-                Collection,
-                new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
-                cancellationToken: ct);
+        if (_collectionReady) return;
 
-            await _client.CreatePayloadIndexAsync(
-                Collection,
-                "cache_key",
-                PayloadSchemaType.Keyword,
-                cancellationToken: ct);
+        await InitLock.WaitAsync(ct);
+        try
+        {
+            if (_collectionReady) return;
+
+            var existing = await _client.ListCollectionsAsync(ct);
+            if (!existing.Contains(Collection))
+            {
+                await _client.CreateCollectionAsync(
+                    Collection,
+                    new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
+                    cancellationToken: ct);
+
+                await _client.CreatePayloadIndexAsync(
+                    Collection,
+                    "cache_key",
+                    PayloadSchemaType.Keyword,
+                    cancellationToken: ct);
+            }
+
+            _collectionReady = true;
+        }
+        finally
+        {
+            InitLock.Release();
         }
     }
 }

@@ -377,23 +377,42 @@ public sealed class QdrantVectorStore : IVectorStore
 
     // ── Collection bootstrap ─────────────────────────────────────────────────
 
+    // Process-wide guard: the store is registered Scoped, but collection existence
+    // is process-global — check Qdrant once per process lifetime, not per request.
+    private static volatile bool _collectionReady;
+    private static readonly SemaphoreSlim InitLock = new(1, 1);
+
     private async Task EnsureCollectionAsync(CancellationToken ct)
     {
-        var existing = await _client.ListCollectionsAsync(ct);
-        if (!existing.Contains(CollectionName))
-        {
-            await _client.CreateCollectionAsync(
-                CollectionName,
-                new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
-                cancellationToken: ct);
-            _logger.LogInformation("Created collection '{Collection}'", CollectionName);
+        if (_collectionReady) return;
 
-            await _client.CreatePayloadIndexAsync(CollectionName, "content",       PayloadSchemaType.Text,    cancellationToken: ct);
-            await _client.CreatePayloadIndexAsync(CollectionName, "tenant_id",     PayloadSchemaType.Keyword, cancellationToken: ct);
-            await _client.CreatePayloadIndexAsync(CollectionName, "visibility",    PayloadSchemaType.Keyword, cancellationToken: ct);
-            await _client.CreatePayloadIndexAsync(CollectionName, "owner_user_id", PayloadSchemaType.Keyword, cancellationToken: ct);
-            await _client.CreatePayloadIndexAsync(CollectionName, "chat_id",       PayloadSchemaType.Keyword, cancellationToken: ct);
-            _logger.LogInformation("Created payload indexes on collection '{Collection}'", CollectionName);
+        await InitLock.WaitAsync(ct);
+        try
+        {
+            if (_collectionReady) return;
+
+            var existing = await _client.ListCollectionsAsync(ct);
+            if (!existing.Contains(CollectionName))
+            {
+                await _client.CreateCollectionAsync(
+                    CollectionName,
+                    new VectorParams { Size = VectorSize, Distance = Distance.Cosine },
+                    cancellationToken: ct);
+                _logger.LogInformation("Created collection '{Collection}'", CollectionName);
+
+                await _client.CreatePayloadIndexAsync(CollectionName, "content",       PayloadSchemaType.Text,    cancellationToken: ct);
+                await _client.CreatePayloadIndexAsync(CollectionName, "tenant_id",     PayloadSchemaType.Keyword, cancellationToken: ct);
+                await _client.CreatePayloadIndexAsync(CollectionName, "visibility",    PayloadSchemaType.Keyword, cancellationToken: ct);
+                await _client.CreatePayloadIndexAsync(CollectionName, "owner_user_id", PayloadSchemaType.Keyword, cancellationToken: ct);
+                await _client.CreatePayloadIndexAsync(CollectionName, "chat_id",       PayloadSchemaType.Keyword, cancellationToken: ct);
+                _logger.LogInformation("Created payload indexes on collection '{Collection}'", CollectionName);
+            }
+
+            _collectionReady = true;
+        }
+        finally
+        {
+            InitLock.Release();
         }
     }
 }

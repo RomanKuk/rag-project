@@ -30,8 +30,10 @@ export class LoginComponent {
       if (role === 'Admin')  this.router.navigate(['/admin']);
       else if (role === 'Owner') this.router.navigate(['/owner']);
       else                       this.router.navigate(['/']);
-    } catch {
-      this.error.set('Invalid email or password.');
+    } catch (err: any) {
+      this.error.set(err?.status === 0
+        ? 'Cannot reach the server — is the backend running?'
+        : 'Invalid email or password.');
     } finally {
       this.loading.set(false);
     }

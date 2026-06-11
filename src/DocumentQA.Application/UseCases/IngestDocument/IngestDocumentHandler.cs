@@ -145,8 +145,13 @@ public sealed class IngestDocumentHandler
             Return ONLY the blurb text — no labels, no quotes.
             """;
 
+        // Bound concurrency: unbounded per-chunk LLM calls would starve the
+        // chat endpoint's LLM gate and can trip provider rate limits.
+        using var enrichGate = new SemaphoreSlim(4);
+
         var tasks = chunks.Select((chunk, i) => (i, task: Task.Run(async () =>
         {
+            await enrichGate.WaitAsync(ct);
             try
             {
                 var userMsg = $"Document: {fileName}\nDocument excerpt: {docSample}\n\nChunk:\n{chunk.Content[..Math.Min(400, chunk.Content.Length)]}";
@@ -158,7 +163,11 @@ public sealed class IngestDocumentHandler
             {
                 return (string?)null;
             }
-        }, ct)));
+            finally
+            {
+                enrichGate.Release();
+            }
+        }, ct))).ToList();
 
         foreach (var (i, task) in tasks)
         {

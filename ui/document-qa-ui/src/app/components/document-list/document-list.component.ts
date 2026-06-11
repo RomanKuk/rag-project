@@ -1,4 +1,5 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, signal, inject, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { DocumentService } from '../../services/document.service';
 
 @Component({
@@ -12,6 +13,8 @@ export class DocumentListComponent implements OnInit {
   error     = signal('');
   deleting  = signal<string | null>(null);
 
+  private readonly destroyRef = inject(DestroyRef);
+
   constructor(private readonly documentService: DocumentService) {}
 
   ngOnInit(): void {
@@ -19,7 +22,7 @@ export class DocumentListComponent implements OnInit {
   }
 
   load(): void {
-    this.documentService.list().subscribe({
+    this.documentService.list().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next:  r => this.documents.set(r.documents),
       error: () => this.error.set('Could not load documents'),
     });
@@ -27,8 +30,9 @@ export class DocumentListComponent implements OnInit {
 
   delete(name: string): void {
     if (this.deleting()) return;
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
     this.deleting.set(name);
-    this.documentService.delete(name).subscribe({
+    this.documentService.delete(name).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
         this.documents.update(docs => docs.filter(d => d !== name));
         this.deleting.set(null);

@@ -9,6 +9,7 @@ interface ServerChunk {
   type: 'token' | 'sources' | 'no_context' | 'done' | 'tool_call';
   token?: string;
   sources?: SourceReference[];
+  message_id?: string;
   cost_usd?: number;
   cache_hit?: boolean;
   fallback_used?: boolean;
@@ -20,10 +21,21 @@ export interface StreamEvent {
   type: 'token' | 'sources' | 'no_context' | 'done' | 'tool_call';
   token?: string;
   sources?: SourceReference[];
+  message_id?: string;
   cost_usd?: number;
   cache_hit?: boolean;
   usage?: { input_tokens: number; output_tokens: number; model: string };
   toolCall?: { tool: string; status: 'running' | 'done' };
+}
+
+/** Thrown when /api/chat rejects the request before streaming (401, 429, ...). */
+export class ChatStreamError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: { error?: string; limit?: number; retryAfterUtc?: string } | null,
+  ) {
+    super(body?.error ?? `API error ${status}`);
+  }
 }
 
 @Injectable({ providedIn: 'root' })
@@ -64,7 +76,11 @@ export class ChatService {
       }),
     });
 
-    if (!response.ok) throw new Error(`API error ${response.status}`);
+    if (!response.ok) {
+      let body = null;
+      try { body = await response.json(); } catch { /* non-JSON error body */ }
+      throw new ChatStreamError(response.status, body);
+    }
     if (!response.body) throw new Error('No response body');
 
     const reader  = response.body.getReader();

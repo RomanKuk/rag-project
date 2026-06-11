@@ -99,6 +99,8 @@ public static class AdminSeeder
             );
             CREATE INDEX IF NOT EXISTS "IX_Feedbacks_TenantId"  ON "Feedbacks" ("TenantId");
             CREATE INDEX IF NOT EXISTS "IX_Feedbacks_CreatedAt" ON "Feedbacks" ("CreatedAt");
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_Feedbacks_MessageId_UserId"
+                ON "Feedbacks" ("MessageId", "UserId") WHERE "MessageId" IS NOT NULL;
             """);
     }
 

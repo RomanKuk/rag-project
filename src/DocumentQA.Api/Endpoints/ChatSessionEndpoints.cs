@@ -65,7 +65,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetWithMessagesAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             return Results.Ok(new
@@ -98,7 +98,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             session.Title     = req.Title;
@@ -116,7 +116,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             await vectorStore.DeleteByChatAsync(id, ct);
@@ -134,7 +134,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             if (file.Length == 0)
@@ -162,7 +162,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             var scope = RetrievalScope.ForChat(
@@ -183,7 +183,7 @@ public static class ChatSessionEndpoints
             CancellationToken ct) =>
         {
             var session = await repo.GetAsync(id, ct);
-            if (session is null || session.UserId != user.UserId)
+            if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
             var scope = RetrievalScope.ForChat(

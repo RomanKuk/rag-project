@@ -1,7 +1,8 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, signal, inject, DestroyRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AuthService } from '../../services/auth.service';
 import { OwnerService, UserSummary } from '../../services/owner.service';
 import { DocumentService } from '../../services/document.service';
@@ -30,6 +31,8 @@ export class OwnerPortalComponent implements OnInit {
   uploadState   = signal<'idle'|'uploading'|'success'|'error'>('idle');
   uploadMessage = signal('');
 
+  private readonly destroyRef = inject(DestroyRef);
+
   constructor(
     readonly auth: AuthService,
     private readonly ownerSvc: OwnerService,
@@ -43,7 +46,7 @@ export class OwnerPortalComponent implements OnInit {
 
   loadUsers(): void {
     this.loadingUsers.set(true);
-    this.ownerSvc.listUsers().subscribe({
+    this.ownerSvc.listUsers().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: u => { this.users.set(u); this.loadingUsers.set(false); },
       error: () => this.loadingUsers.set(false),
     });
@@ -51,7 +54,7 @@ export class OwnerPortalComponent implements OnInit {
 
   loadDocs(): void {
     this.loadingDocs.set(true);
-    this.docSvc.list().subscribe({
+    this.docSvc.list().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: r => { this.documents.set(r.documents); this.loadingDocs.set(false); },
       error: () => this.loadingDocs.set(false),
     });
@@ -62,7 +65,7 @@ export class OwnerPortalComponent implements OnInit {
     this.userSuccess.set('');
     this.ownerSvc.createUser(
       this.newEmail(), this.newPassword(), this.newDisplayName() || undefined
-    ).subscribe({
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: r => {
         this.userSuccess.set(`User ${r.email} added.`);
         this.newEmail.set('');
@@ -82,7 +85,7 @@ export class OwnerPortalComponent implements OnInit {
     this.uploadState.set('uploading');
     this.uploadMessage.set(`Uploading ${file.name}…`);
 
-    this.docSvc.upload(file).subscribe({
+    this.docSvc.upload(file).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: r => {
         this.uploadState.set('success');
         this.uploadMessage.set(`"${r.file}" ingested (${r.chunks} chunks, shared).`);
@@ -99,6 +102,7 @@ export class OwnerPortalComponent implements OnInit {
   }
 
   deleteDoc(name: string): void {
-    this.docSvc.delete(name).subscribe({ next: () => this.loadDocs() });
+    if (!confirm(`Delete "${name}" for the whole team? This cannot be undone.`)) return;
+    this.docSvc.delete(name).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: () => this.loadDocs() });
   }
 }

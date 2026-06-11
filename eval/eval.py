@@ -315,9 +315,20 @@ def main() -> None:
 
     # Pass API_KEY_A to the main eval if configured (otherwise anonymous)
     eval_api_key = API_KEY_A or ""
+    if not eval_api_key:
+        print("NOTE: API_KEY_A not set — running anonymously. This works only when the API")
+        print("      has no ApiKeys configured (dev mode); otherwise requests will get 401.")
 
     print(f"Running Ragas evaluation over {len(golden)} questions...")
-    dataset, raw_rows = build_dataset(golden, api_key=eval_api_key)
+    try:
+        dataset, raw_rows = build_dataset(golden, api_key=eval_api_key)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise SystemExit(
+                "FATAL: API returned 401 Unauthorized. Set API_KEY_A to a key configured "
+                "in the API's ApiKeys section, or run the API with an empty ApiKeys config (dev mode)."
+            )
+        raise
 
     results = evaluate(
         dataset,

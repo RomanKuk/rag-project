@@ -1,6 +1,7 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, signal, inject, DestroyRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { BaseChartDirective } from 'ng2-charts';
 import { Chart, ChartConfiguration, registerables } from 'chart.js';
 import { AdminService, DailyBucket, OverallMetrics, TenantMetrics, TenantSummary } from '../../services/admin.service';
@@ -53,6 +54,8 @@ export class AdminDashboardComponent implements OnInit {
     scales: { y: { beginAtZero: true } },
   };
 
+  private readonly destroyRef = inject(DestroyRef);
+
   constructor(
     private readonly adminSvc: AdminService,
     readonly auth: AuthService,
@@ -64,20 +67,20 @@ export class AdminDashboardComponent implements OnInit {
 
   loadDashboard(): void {
     this.loading.set(true);
-    this.adminSvc.getMetrics().subscribe({
+    this.adminSvc.getMetrics().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: m => {
         this.metrics.set(m);
         this._buildBarChart(m.topTenantsByCost);
         this.loading.set(false);
         this.loadTimeSeries();
-        this.adminSvc.getTenants().subscribe(t => this.tenants.set(t));
+        this.adminSvc.getTenants().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(t => this.tenants.set(t));
       },
       error: () => { this.error.set('Failed to load metrics.'); this.loading.set(false); },
     });
   }
 
   loadTimeSeries(): void {
-    this.adminSvc.getTimeSeries(this.timeseriesDays(), this.selectedTenantId()).subscribe({
+    this.adminSvc.getTimeSeries(this.timeseriesDays(), this.selectedTenantId()).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: buckets => this._buildLineChart(buckets),
     });
   }
@@ -88,7 +91,7 @@ export class AdminDashboardComponent implements OnInit {
     this.adminSvc.createTenant(
       this.newTenantName(), this.newOwnerEmail(), this.newOwnerPassword(),
       this.newOwnerDisplayName() || undefined, this.newDailyTokenLimit()
-    ).subscribe({
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: r => {
         this.createSuccess.set(`Tenant '${this.newTenantName()}' created (slug: ${r.slug})`);
         this.newTenantName.set('');
@@ -111,7 +114,7 @@ export class AdminDashboardComponent implements OnInit {
   saveLimit(): void {
     const state = this.editLimit();
     if (!state) return;
-    this.adminSvc.updateTenant(state.id, { dailyTokenLimit: state.value }).subscribe({
+    this.adminSvc.updateTenant(state.id, { dailyTokenLimit: state.value }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: updated => {
         this.tenants.update(list =>
           list.map(t => t.id === updated.id ? { ...t, dailyTokenLimit: updated.dailyTokenLimit } : t)

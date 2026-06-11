@@ -35,6 +35,7 @@ public static class ChatEndpoints
             ITenantRepository tenantRepo,
             IModelRouter modelRouter,
             IOptions<RagOptions> ragOpts,
+            IServiceScopeFactory scopeFactory,
             LlmGate gate,
             StreamMetrics metrics,
             ILoggerFactory loggerFactory,
@@ -61,7 +62,7 @@ public static class ChatEndpoints
             if (hasJwt && req.SessionId.HasValue)
             {
                 session = await sessionRepo.GetAsync(req.SessionId.Value, ctx.RequestAborted);
-                if (session is null || session.UserId != currentUser.UserId)
+                if (session is null || session.UserId != currentUser.UserId || session.TenantId != currentUser.TenantSlug)
                 {
                     ctx.Response.StatusCode = 404;
                     await ctx.Response.WriteAsJsonAsync(new { error = "Chat session not found." });
@@ -91,7 +92,11 @@ public static class ChatEndpoints
             if (ctx.Items.TryGetValue(ApiKeyFilter.TenantContextItemKey, out var tcv) && tcv is TenantContext tenantCtxVal)
                 tier = tenantCtxVal.Tier;
             else
-                tier = DefaultTier;
+                tier = new TierInfo
+                {
+                    TokensPerMinute = ragOpts.Value.JwtTokensPerMinute,
+                    Models          = [ragOpts.Value.ComplexModel, ragOpts.Value.SimpleModel],
+                };
 
             // ── Daily quota gate (JWT path) ──────────────────────────────────
             if (hasJwt)
@@ -134,7 +139,7 @@ public static class ChatEndpoints
                 var retryAfter = 60 - DateTime.UtcNow.Second;
                 ctx.Response.StatusCode = 429;
                 ctx.Response.Headers["Retry-After"] = retryAfter.ToString();
-                await ctx.Response.WriteAsJsonAsync(new { detail = "Rate limit exceeded" });
+                await ctx.Response.WriteAsJsonAsync(new { error = "Rate limit exceeded" });
                 return;
             }
 
@@ -158,7 +163,8 @@ public static class ChatEndpoints
             ctx.Response.Headers.CacheControl = "no-cache";
             ctx.Response.Headers.Connection    = "keep-alive";
 
-            var requestId = Guid.NewGuid().ToString();
+            var requestId          = Guid.NewGuid().ToString();
+            var assistantMessageId = Guid.NewGuid();
             var start     = Stopwatch.GetTimestamp();
             int? ttftMs   = null;
             IReadOnlyList<Domain.Retrieval.Citation>? cachedSources = null;
@@ -198,6 +204,7 @@ public static class ChatEndpoints
                         var doneEvent = new
                         {
                             type          = "done",
+                            message_id    = session is not null ? assistantMessageId : (Guid?)null,
                             usage         = new { input_tokens = usage.InputTokens, output_tokens = usage.OutputTokens, model = usage.Model },
                             cost_usd      = cost,
                             cache_hit     = usage.CacheHit,
@@ -220,23 +227,40 @@ public static class ChatEndpoints
                             ? JsonSerializer.Serialize(cachedSources, JsonOpts)
                             : null;
 
+                        // Background persistence MUST use its own DI scope — the request
+                        // scope (and its DbContext) is disposed once the response completes.
+                        var sessionId       = session?.Id;
+                        var responseContent = responseBuffer.ToString();
                         _ = Task.Run(async () =>
                         {
-                            await usageTracker.LogAsync(record, CancellationToken.None);
-                            await rateLimiter.DeductAsync(apiKey, usage.InputTokens + usage.OutputTokens, CancellationToken.None);
-
-                            if (session is not null)
+                            try
                             {
-                                await sessionRepo.AddMessageAsync(new ChatMessage
+                                await using var bgScope = scopeFactory.CreateAsyncScope();
+                                var bgTracker     = bgScope.ServiceProvider.GetRequiredService<IUsageTracker>();
+                                var bgRateLimiter = bgScope.ServiceProvider.GetRequiredService<ITokenRateLimiter>();
+
+                                await bgTracker.LogAsync(record, CancellationToken.None);
+                                await bgRateLimiter.DeductAsync(apiKey, usage.InputTokens + usage.OutputTokens, CancellationToken.None);
+
+                                if (sessionId is not null)
                                 {
-                                    SessionId    = session.Id,
-                                    Role         = "assistant",
-                                    Content      = responseBuffer.ToString(),
-                                    SourcesJson  = sourcesJson,
-                                    InputTokens  = usage.InputTokens,
-                                    OutputTokens = usage.OutputTokens,
-                                    CostUsd      = cost,
-                                }, CancellationToken.None);
+                                    var bgSessionRepo = bgScope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+                                    await bgSessionRepo.AddMessageAsync(new ChatMessage
+                                    {
+                                        Id           = assistantMessageId,
+                                        SessionId    = sessionId.Value,
+                                        Role         = "assistant",
+                                        Content      = responseContent,
+                                        SourcesJson  = sourcesJson,
+                                        InputTokens  = usage.InputTokens,
+                                        OutputTokens = usage.OutputTokens,
+                                        CostUsd      = cost,
+                                    }, CancellationToken.None);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogError(ex, "Background persistence failed for request {RequestId}", requestId);
                             }
                         });
                         continue;
@@ -272,12 +296,6 @@ public static class ChatEndpoints
             }
         })
         .AddEndpointFilter<ApiKeyFilter>();
-
-    private static readonly TierInfo DefaultTier = new()
-    {
-        TokensPerMinute = int.MaxValue,
-        Models = ["gpt-4o"],
-    };
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

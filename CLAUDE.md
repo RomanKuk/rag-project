@@ -139,17 +139,18 @@ Default admin credentials (seeded if no Admin user exists):
 
 ### RAG pipeline (`AskQuestionHandler`)
 
-1. **Input safety** — `ISafetyFilter.CheckAsync` on the question; block if flagged.
-2. **Query processing** — `IQueryProcessor` expands keywords, detects intent (`qa`/`summary`/`comparison`/`lookup`), decomposes into `SubQueries[]`.
-3. **Embed** — single `IEmbeddingPort.EmbedAsync` call; vector reused for cache + retrieval.
-4. **Cache check** — `ISemanticCache.TryGetAsync` (cosine 0.92). HIT → stream word-by-word and exit.
-5. **Vector search** — `SearchAsync` (or `SearchMultiQueryAsync` when sub-queries present, then deduplicate by chunk ID).
-6. **Rerank** — `ICrossEncoderReranker` (Cohere if configured, else identity).
-7. **Token-budget prompt** — `TemplatePromptBuilder` uses SharpToken to fit chunks within `MaxContextTokens`; system prompt placed first for OpenAI prefix caching.
-8. **Model routing** — `IModelRouter` picks model chain based on query complexity (length, sub-query count, intent).
-9. **Stream** — `IChatCompletionPort.StreamAsync`; tokens forwarded immediately.
-10. **Guardrails** — `IAnswerGuardrail` (citation presence), fire-and-forget `IGroundednessCheck`, output `ISafetyFilter`.
-11. **Persist + cache** — assistant message saved to `ChatMessages`; answer stored in semantic cache (fire-and-forget).
+Order is cost-driven: the cache is checked **before** any LLM call, so cache hits cost only one embedding.
+
+1. **Embed raw question** — single `IEmbeddingPort.EmbedAsync`; this vector is the cache key.
+2. **Cache check** — `ISemanticCache.TryGetAsync` (cosine 0.95). HIT → stream word-by-word and exit (no query-processor LLM call).
+3. **Query processing (miss only)** — `IQueryProcessor` expands keywords, detects intent, decomposes into `SubQueries[]`; re-embeds only if the search text differs from the raw question.
+4. **Vector search** — hybrid dense+keyword (or `SearchMultiQueryAsync` per sub-query, deduplicated by chunk ID).
+5. **Rerank** — `IReranker` resolved by `RerankerStrategy`: `llm` → LlmReranker, `crossencoder` → CrossEncoderRerankerStrategy (delegates to Cohere/Null `ICrossEncoderReranker`), else identity.
+6. **Token-budget prompt** — `TemplatePromptBuilder` uses SharpToken to fit chunks within `MaxContextTokens`; system prompt first for OpenAI prefix caching.
+7. **Model routing** — `IModelRouter` picks cheap vs strong model (done in `ChatEndpoints` before the handler).
+8. **Stream** — `IChatCompletionPort.StreamAsync`; tokens forwarded immediately.
+9. **Guardrails** — citation presence check; `IGroundednessCheck` only when `GroundednessEnabled`; output `ISafetyFilter` (span-traced).
+10. **Persist + cache** — assistant message persisted with a pre-generated ID (returned as `message_id` in the `done` SSE event for the feedback flow); answer cached under the **raw-question vector**. Background persistence runs in its own DI scope (`IServiceScopeFactory`) — never reuse request-scoped services in `Task.Run`.
 
 ### Retrieval scope (`RetrievalScope`)
 
@@ -164,9 +165,11 @@ Three modes control the Qdrant filter:
 data: {"type":"sources","sources":[...]}        ← before tokens
 data: {"type":"token","token":"Hello "}         ← streamed tokens
 data: {"type":"no_context"}                     ← zero results from vector search
-data: {"type":"done","cost_usd":0.001,"cache_hit":false,"usage":{...}}
+data: {"type":"done","message_id":"<guid>","cost_usd":0.001,"cache_hit":false,"usage":{...}}
 data: [DONE]
 ```
+
+`message_id` (present only for session-bound requests) is the persisted assistant `ChatMessage` ID — the UI uses it for `POST /api/chat/feedback`, which validates message ownership and upserts one rating per `(MessageId, UserId)`.
 
 `/api/chat` requires JWT **or** a configured API key (`ApiKeys` section). No credential → 401. The Angular `ChatService` uses `fetch` + `ReadableStream` (not `EventSource`) because SSE is POST-based.
 
@@ -207,8 +210,11 @@ data: [DONE]
 | `Rag` | `MaxHistoryTurns` | `6` | History turns replayed per request |
 | `Rag` | `SimpleModel` / `ComplexModel` | `gpt-4o-mini` / `gpt-4o` | Complexity router targets |
 | `Rag` | `EmbeddingModel` / `EmbeddingDimensions` | `text-embedding-3-small` / `1536` | Changing requires re-indexing |
-| `Rag` | `EnrichmentEnabled` | `false` | Contextual blurb per chunk (costs extra LLM calls) |
+| `Rag` | `EnrichmentEnabled` | `false` | Contextual blurb per chunk (costs extra LLM calls, capped at 4 concurrent) |
 | `Rag` | `MultimodalEnabled` | `false` | Vision-model table/image extraction |
+| `Rag` | `GroundednessEnabled` | `false` | Post-generation LLM entailment check (one extra LLM call per answer) |
+| `Rag` | `JwtTokensPerMinute` | `20000` | Per-minute rate limit for JWT users (API-key users use tier limits) |
+| `Cors` | `AllowedOrigins` | `["http://localhost:4200"]` | Array of allowed origins |
 | `Reranker` | `Provider` / `ApiKey` | `cohere` / `""` | Empty key → `NullCrossEncoderReranker` |
 | `Cache` | `Enabled` | `true` | |
 | `Cache` | `SimilarityThreshold` | `0.95` | Cosine sim for cache hit |

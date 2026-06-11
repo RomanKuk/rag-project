@@ -46,8 +46,10 @@ builder.Services.Configure<RagOptions>(builder.Configuration.GetSection("Rag"));
 builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection("Cache"));
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
+var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+                  ?? ["http://localhost:4200"];
 builder.Services.AddCors(o => o.AddPolicy("Angular", p =>
-    p.WithOrigins("http://localhost:4200").AllowAnyHeader().AllowAnyMethod()));
+    p.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod()));
 
 // ── PostgreSQL + EF Core ──────────────────────────────────────────────────────
 var pgConn = builder.Configuration["Postgres:ConnectionString"]!;
@@ -93,7 +95,7 @@ builder.Services.AddAuthorization(o =>
 
 // ── Semantic Kernel — embeddings ──────────────────────────────────────────────
 builder.Services.AddOpenAIEmbeddingGenerator(
-    modelId: "text-embedding-3-small",
+    modelId: builder.Configuration["Rag:EmbeddingModel"] ?? "text-embedding-3-small",
     apiKey:  builder.Configuration["OpenAI:ApiKey"]!,
     serviceId: "embeddings");
 
@@ -119,7 +121,8 @@ var openAiKey = builder.Configuration["OpenAI:ApiKey"] ?? string.Empty;
 builder.Services.AddHttpClient("OpenAIModeration", c =>
 {
     c.DefaultRequestHeaders.Add("Authorization", $"Bearer {openAiKey}");
-});
+    c.Timeout = TimeSpan.FromSeconds(30);
+}).AddStandardResilienceHandler();
 if (!string.IsNullOrEmpty(openAiKey))
     builder.Services.AddScoped<ISafetyFilter, OpenAIModerationFilter>();
 else
@@ -182,12 +185,16 @@ builder.Services.AddScoped<PassThroughQueryProcessor>();
 builder.Services.AddScoped<IReranker>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<RagOptions>>().Value;
-    return opts.RerankerStrategy.Equals("llm", StringComparison.OrdinalIgnoreCase)
-        ? (IReranker)sp.GetRequiredService<LlmReranker>()
-        : sp.GetRequiredService<IdentityReranker>();
+    return opts.RerankerStrategy.ToLowerInvariant() switch
+    {
+        "llm"          => sp.GetRequiredService<LlmReranker>(),
+        "crossencoder" => sp.GetRequiredService<CrossEncoderRerankerStrategy>(),
+        _              => (IReranker)sp.GetRequiredService<IdentityReranker>(),
+    };
 });
 builder.Services.AddScoped<LlmReranker>();
 builder.Services.AddScoped<IdentityReranker>();
+builder.Services.AddScoped<CrossEncoderRerankerStrategy>();
 
 // Cross-encoder reranker (opt-in: set Reranker:Provider=cohere and Reranker:ApiKey)
 var rerankerApiKey = builder.Configuration["Reranker:ApiKey"];
@@ -197,7 +204,8 @@ if (!string.IsNullOrEmpty(rerankerApiKey))
     {
         c.DefaultRequestHeaders.Add("Authorization", $"Bearer {rerankerApiKey}");
         c.DefaultRequestHeaders.Add("Accept", "application/json");
-    });
+        c.Timeout = TimeSpan.FromSeconds(30);
+    }).AddStandardResilienceHandler();
     builder.Services.Configure<RerankerOptions>(builder.Configuration.GetSection("Reranker"));
     builder.Services.AddScoped<ICrossEncoderReranker, CohereCrossEncoderReranker>();
 }
@@ -207,11 +215,18 @@ else
 }
 
 // ── Generation (chat, prompt, guardrail, model router, groundedness) ─────────
+// Named client for OpenRouter streaming — pooled, with a generous streaming timeout.
+builder.Services.AddHttpClient("OpenRouterChat", c =>
+{
+    c.BaseAddress = new Uri(builder.Configuration["OpenRouter:BaseUrl"] ?? "https://openrouter.ai/api/v1");
+    c.Timeout     = TimeSpan.FromSeconds(120);
+});
 builder.Services.AddScoped<IPromptBuilder, TemplatePromptBuilder>();
 builder.Services.AddScoped<IChatCompletionPort, OpenAIChatAdapter>();
 builder.Services.AddScoped<IAnswerGuardrail, CitationPresenceGuardrail>();
 builder.Services.AddScoped<IGroundednessCheck, LlmGroundednessCheck>();
 builder.Services.AddSingleton<IModelRouter, ComplexityModelRouter>();
+builder.Services.AddSingleton<ITokenCounter, SharpTokenCounter>();
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ISemanticCache, QdrantSemanticCache>();
@@ -251,6 +266,30 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+// ── Startup configuration sanity checks ──────────────────────────────────────
+{
+    var startupLog    = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+    var adminPassword = builder.Configuration["Admin:Password"];
+    var usingDefaultAdminPassword = string.IsNullOrEmpty(adminPassword) || adminPassword == "Admin1234!";
+
+    if (usingDefaultAdminPassword)
+    {
+        if (app.Environment.IsProduction())
+            throw new InvalidOperationException(
+                "Refusing to start in Production with the default admin password. Set Admin:Password.");
+        startupLog.LogWarning("SECURITY: admin account uses the DEFAULT password. Set Admin:Password before exposing this instance.");
+    }
+
+    if (!builder.Configuration.GetSection("ApiKeys").GetChildren().Any())
+        startupLog.LogWarning("SECURITY: no API keys configured — API-key requests pass through as anonymous (dev mode).");
+
+    if (!builder.Configuration.GetSection("Langfuse").GetValue<bool>("Enabled"))
+        startupLog.LogInformation("Observability: Langfuse export disabled — spans are emitted locally only.");
+
+    if (string.IsNullOrEmpty(rerankerApiKey))
+        startupLog.LogInformation("Retrieval: no Reranker:ApiKey — cross-encoder reranking disabled (Null adapter).");
+}
+
 // ── Startup: run migrations + seed admin ─────────────────────────────────────
 await AdminSeeder.SeedAsync(app.Services);
 
@@ -269,13 +308,24 @@ app.MapChatSessionEndpoints();
 app.MapFeedbackEndpoints();
 app.MapUsageEndpoints();
 
-app.MapGet("/health", (StreamMetrics m, LlmGate g) => Results.Ok(new
+app.MapGet("/health", async (StreamMetrics m, LlmGate g, AppDbContext db, QdrantClient qdrant, CancellationToken ct) =>
 {
-    status               = "ok",
-    active_streams       = m.Active,
-    aborted_streams      = m.Aborted,
-    llm_slots_available  = g.Available,
-    llm_slots_max        = g.MaxConcurrent
-}));
+    bool pgOk = false, qdrantOk = false;
+    try { pgOk = await db.Database.CanConnectAsync(ct); } catch { /* unreachable -> false */ }
+    try { await qdrant.ListCollectionsAsync(ct); qdrantOk = true; } catch { /* unreachable -> false */ }
+
+    var healthy = pgOk && qdrantOk;
+    var payload = new
+    {
+        status               = healthy ? "ok" : "degraded",
+        postgres             = pgOk,
+        qdrant               = qdrantOk,
+        active_streams       = m.Active,
+        aborted_streams      = m.Aborted,
+        llm_slots_available  = g.Available,
+        llm_slots_max        = g.MaxConcurrent
+    };
+    return healthy ? Results.Ok(payload) : Results.Json(payload, statusCode: 503);
+});
 
 app.Run();

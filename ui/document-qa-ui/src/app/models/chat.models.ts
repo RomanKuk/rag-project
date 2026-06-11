@@ -7,8 +7,9 @@ export interface ChatMessage {
   cacheHit?: boolean;
   model?: string;
   activeToolCall?: string;
-  feedback?: 1 | -1; // user thumbs up/down
-  messageId?: string; // persisted message ID for feedback
+  feedback?: 1 | -1;     // user thumbs up/down
+  feedbackSent?: boolean; // true once the rating was persisted
+  messageId?: string;    // persisted message ID for feedback
 }
 
 export interface SourceReference {

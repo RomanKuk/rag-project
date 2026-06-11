@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { filter, map } from 'rxjs';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { AuthService } from './services/auth.service';
-import { ChatSessionService, ChatSessionSummary } from './services/chat-session.service';
+import { ChatSessionService } from './services/chat-session.service';
 
 @Component({
   selector: 'app-root',
@@ -17,7 +17,10 @@ export class AppComponent {
   readonly sessionService = inject(ChatSessionService);
   private  readonly router = inject(Router);
 
-  sessions         = signal<ChatSessionSummary[]>([]);
+  // Sidebar reads the service's shared signal — renames done elsewhere
+  // (e.g. auto-title in the chat view) show up without a reload.
+  readonly sessions = this.sessionService.sessions;
+
   currentSessionId = signal<string | null>(null);
   showNewDialog    = signal(false);
   newTitle         = signal('');
@@ -39,21 +42,12 @@ export class AppComponent {
   constructor() {
     effect(() => {
       if (this.auth.isLoggedIn()) {
-        this.loadSessions();
+        this.sessionService.reload();
       } else {
-        this.sessions.set([]);
+        this.sessionService.sessions.set([]);
         this.currentSessionId.set(null);
       }
     });
-  }
-
-  async loadSessions(): Promise<void> {
-    try {
-      const list = await this.sessionService.list();
-      this.sessions.set(list);
-    } catch {
-      // not critical — silently fail
-    }
   }
 
   openNewChat(): void {
@@ -66,7 +60,6 @@ export class AppComponent {
     const title = this.newTitle().trim() || 'New chat';
     try {
       const session = await this.sessionService.create(title, this.newIncludeShared());
-      this.sessions.update(s => [session, ...s]);
       this.currentSessionId.set(session.id);
       this.showNewDialog.set(false);
       this.router.navigate([''], { queryParams: { session: session.id } });
@@ -82,9 +75,9 @@ export class AppComponent {
 
   async deleteSession(id: string, event: Event): Promise<void> {
     event.stopPropagation();
+    if (!confirm('Delete this chat and its documents? This cannot be undone.')) return;
     try {
       await this.sessionService.delete(id);
-      this.sessions.update(s => s.filter(x => x.id !== id));
       if (this.currentSessionId() === id) {
         this.currentSessionId.set(null);
         this.router.navigate(['']);

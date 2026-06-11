@@ -2,14 +2,46 @@
   <div class="chat-toolbar">
     @if (sessionId()) {
       <span class="session-badge">{{ sessionId()!.slice(0, 8) }}…</span>
+      <button class="btn-docs" (click)="toggleDocs()">
+        Documents ({{ docs().length }})
+      </button>
     }
     @if (messages().length > 0) {
       <button class="btn-clear" (click)="clearHistory()">Clear</button>
     }
   </div>
 
+  @if (showDocs() && sessionId()) {
+    <div class="docs-panel">
+      <div class="docs-header">
+        <span>Documents in this chat</span>
+        <label class="btn-upload" [class.disabled]="docUploading()">
+          {{ docUploading() ? 'Uploading…' : '+ Add' }}
+          <input type="file" accept=".pdf,.docx,.txt" (change)="onDocSelected($event)" [disabled]="docUploading()" hidden>
+        </label>
+      </div>
+      @if (docError()) {
+        <p class="docs-error">{{ docError() }}</p>
+      }
+      @if (docs().length === 0 && !docUploading()) {
+        <p class="docs-empty">No documents attached — answers use tenant-shared documents only.</p>
+      }
+      @for (doc of docs(); track doc) {
+        <div class="doc-row">
+          <span class="doc-name">{{ doc }}</span>
+          <button class="btn-doc-delete" (click)="deleteDoc(doc)" title="Remove">✕</button>
+        </div>
+      }
+    </div>
+  }
+
   <div class="messages" #scrollContainer>
-    @if (messages().length === 0) {
+    @if (historyLoading()) {
+      <div class="empty-state">
+        <span class="tool-spinner"></span>
+        <p>Loading conversation…</p>
+      </div>
+    } @else if (messages().length === 0) {
       <div class="empty-state">
         <p>
           @if (sessionId()) {
@@ -30,17 +62,21 @@
               {{ msg.activeToolCall }}
             </div>
           }
-          <div class="content">
-            {{ msg.content }}
+          @if (msg.role === 'assistant') {
+            <div class="content markdown" [innerHTML]="msg.content | markdown"></div>
             @if (msg.isStreaming && !msg.activeToolCall) {
               <span class="cursor">▋</span>
             }
-          </div>
+          } @else {
+            <div class="content">{{ msg.content }}</div>
+          }
           @if (msg.sources && msg.sources.length > 0) {
             <div class="sources">
               <span class="sources-label">Sources:</span>
-              @for (src of msg.sources; track src.documentName + src.page) {
-                <span class="source-tag">{{ src.documentName }} p.{{ src.page }}</span>
+              @for (src of msg.sources; track (src.documentName ?? '') + src.page) {
+                <span class="source-tag">
+                  {{ src.documentName || 'unknown' }}@if (src.page > 0) {&nbsp;p.{{ src.page }}}
+                </span>
               }
             </div>
           }
@@ -57,13 +93,18 @@
               <button
                 class="btn-feedback"
                 [class.active]="msg.feedback === 1"
+                [disabled]="msg.feedbackSent"
                 (click)="sendFeedback($index, 1)"
                 title="Good answer">👍</button>
               <button
                 class="btn-feedback"
                 [class.active]="msg.feedback === -1"
+                [disabled]="msg.feedbackSent"
                 (click)="sendFeedback($index, -1)"
                 title="Bad answer">👎</button>
+              @if (msg.feedbackSent) {
+                <span class="feedback-thanks">Thanks!</span>
+              }
             </div>
           }
         </div>
@@ -78,11 +119,11 @@
       (keydown)="onKeyDown($event)"
       placeholder="Ask a question about your documents..."
       rows="2"
-      [disabled]="isLoading()">
+      [disabled]="isLoading() || historyLoading()">
     </textarea>
     <button
       (click)="sendMessage()"
-      [disabled]="isLoading() || !question().trim()">
+      [disabled]="isLoading() || historyLoading() || !question().trim()">
       {{ isLoading() ? '...' : 'Send' }}
     </button>
   </div>

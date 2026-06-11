@@ -67,10 +67,12 @@ export class AuthService {
         localStorage.removeItem(TOKEN_KEY);
         return null;
       }
+      const validRoles: CurrentUser['role'][] = ['Admin', 'Owner', 'Member'];
       return {
         userId:      payload.sub,
         email:       payload.email,
-        role:        payload.role as CurrentUser['role'],
+        role:        validRoles.includes(payload.role as CurrentUser['role'])
+                       ? payload.role as CurrentUser['role'] : 'Member',
         tenantSlug:  payload.tenant_id,
         displayName: payload.display_name,
       };

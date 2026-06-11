@@ -1,4 +1,4 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
@@ -33,6 +33,10 @@ export class ChatSessionService {
   private readonly auth    = inject(AuthService);
   private readonly apiUrl  = environment.apiUrl;
 
+  // Shared session list — single source of truth for the sidebar and chat view,
+  // so renames/creates/deletes reflect everywhere without a page reload.
+  readonly sessions = signal<ChatSessionSummary[]>([]);
+
   private headers(): HttpHeaders {
     const token = this.auth.token();
     return token
@@ -40,20 +44,32 @@ export class ChatSessionService {
       : new HttpHeaders();
   }
 
+  async reload(): Promise<void> {
+    try {
+      const list = await firstValueFrom(
+        this.http.get<ChatSessionSummary[]>(`${this.apiUrl}/api/chats`, { headers: this.headers() })
+      );
+      this.sessions.set(list);
+    } catch {
+      this.sessions.set([]);
+    }
+  }
+
   async list(): Promise<ChatSessionSummary[]> {
-    return firstValueFrom(
-      this.http.get<ChatSessionSummary[]>(`${this.apiUrl}/api/chats`, { headers: this.headers() })
-    );
+    await this.reload();
+    return this.sessions();
   }
 
   async create(title: string, includeSharedDocs: boolean): Promise<ChatSessionSummary> {
-    return firstValueFrom(
+    const created = await firstValueFrom(
       this.http.post<ChatSessionSummary>(
         `${this.apiUrl}/api/chats`,
         { title, includeSharedDocs },
         { headers: this.headers() }
       )
     );
+    this.sessions.update(list => [created, ...list]);
+    return created;
   }
 
   async get(id: string): Promise<ChatSessionDetail> {
@@ -66,12 +82,14 @@ export class ChatSessionService {
     await firstValueFrom(
       this.http.patch(`${this.apiUrl}/api/chats/${id}`, { title }, { headers: this.headers() })
     );
+    this.sessions.update(list => list.map(s => s.id === id ? { ...s, title } : s));
   }
 
   async delete(id: string): Promise<void> {
     await firstValueFrom(
       this.http.delete(`${this.apiUrl}/api/chats/${id}`, { headers: this.headers() })
     );
+    this.sessions.update(list => list.filter(s => s.id !== id));
   }
 
   async uploadDocument(sessionId: string, file: File): Promise<void> {
