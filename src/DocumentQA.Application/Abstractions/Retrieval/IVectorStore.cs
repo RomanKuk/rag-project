@@ -23,5 +23,7 @@ public interface IVectorStore
 
     Task<IReadOnlyList<string>> ListDocumentNamesAsync(RetrievalScope scope, CancellationToken ct);
     Task DeleteDocumentAsync(string documentName, RetrievalScope scope, CancellationToken ct);
+    Task DeleteByChatAsync(Guid chatId, CancellationToken ct);
     Task<long> CountDocumentsAsync(string tenantId, CancellationToken ct);
+    Task<long> CountChunksAsync(string tenantId, CancellationToken ct);
 }

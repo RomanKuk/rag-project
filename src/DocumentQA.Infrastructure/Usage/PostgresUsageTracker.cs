@@ -158,6 +158,16 @@ public sealed class PostgresUsageTracker(IDbContextFactory<AppDbContext> dbFacto
             topByCost);
     }
 
+    public async Task<long> GetTenantTokensTodayAsync(string tenantSlug, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var today = DateTime.UtcNow.Date;
+        var total = await db.UsageLogs
+            .Where(u => u.TenantId == tenantSlug && u.CreatedAt >= today)
+            .SumAsync(u => (long)u.InputTokens + u.OutputTokens, ct);
+        return total;
+    }
+
     public async Task<IReadOnlyList<DailyBucket>> GetTimeSeriesAsync(
         int days, string? tenantId = null, CancellationToken ct = default)
     {

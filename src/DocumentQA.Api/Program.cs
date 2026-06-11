@@ -3,6 +3,7 @@ using DocumentQA.Api.Auth;
 using DocumentQA.Api.Endpoints;
 using DocumentQA.Api.Services;
 using DocumentQA.Application.Abstractions.Cache;
+using DocumentQA.Application.Abstractions.Chat;
 using DocumentQA.Application.Abstractions.Generation;
 using DocumentQA.Application.Abstractions.Identity;
 using DocumentQA.Application.Abstractions.Ingestion;
@@ -17,6 +18,7 @@ using DocumentQA.Application.UseCases.IngestDocument;
 using DocumentQA.Application.UseCases.Owner;
 using DocumentQA.Infrastructure.Agent;
 using DocumentQA.Infrastructure.Cache;
+using DocumentQA.Infrastructure.Chat;
 using DocumentQA.Infrastructure.Chunking;
 using DocumentQA.Infrastructure.Embeddings;
 using DocumentQA.Infrastructure.Generation;
@@ -55,8 +57,9 @@ builder.Services.AddScoped(sp =>
     sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
 
 // ── Identity ports + adapters ─────────────────────────────────────────────────
-builder.Services.AddScoped<IUserRepository,   EfUserRepository>();
-builder.Services.AddScoped<ITenantRepository, EfTenantRepository>();
+builder.Services.AddScoped<IUserRepository,        EfUserRepository>();
+builder.Services.AddScoped<ITenantRepository,      EfTenantRepository>();
+builder.Services.AddScoped<IChatSessionRepository, EfChatSessionRepository>();
 builder.Services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
 builder.Services.AddSingleton<IJwtTokenService, JwtTokenService>();
 builder.Services.AddHttpContextAccessor();
@@ -110,6 +113,17 @@ builder.Services.AddSingleton<StreamMetrics>();
 // ── Security ──────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IInputGuard, InputGuard>();
 builder.Services.AddSingleton<ISuspiciousActivityLog, SuspiciousActivityLogger>();
+
+// Safety moderation filter (OpenAI moderation API — opt-in when OpenAI key present)
+var openAiKey = builder.Configuration["OpenAI:ApiKey"] ?? string.Empty;
+builder.Services.AddHttpClient("OpenAIModeration", c =>
+{
+    c.DefaultRequestHeaders.Add("Authorization", $"Bearer {openAiKey}");
+});
+if (!string.IsNullOrEmpty(openAiKey))
+    builder.Services.AddScoped<ISafetyFilter, OpenAIModerationFilter>();
+else
+    builder.Services.AddSingleton<ISafetyFilter, NullSafetyFilter>();
 
 // ── Auth endpoint filter ──────────────────────────────────────────────────────
 builder.Services.AddTransient<ApiKeyFilter>();
@@ -175,10 +189,29 @@ builder.Services.AddScoped<IReranker>(sp =>
 builder.Services.AddScoped<LlmReranker>();
 builder.Services.AddScoped<IdentityReranker>();
 
-// ── Generation (chat, prompt, guardrail) ──────────────────────────────────────
+// Cross-encoder reranker (opt-in: set Reranker:Provider=cohere and Reranker:ApiKey)
+var rerankerApiKey = builder.Configuration["Reranker:ApiKey"];
+if (!string.IsNullOrEmpty(rerankerApiKey))
+{
+    builder.Services.AddHttpClient("Cohere", c =>
+    {
+        c.DefaultRequestHeaders.Add("Authorization", $"Bearer {rerankerApiKey}");
+        c.DefaultRequestHeaders.Add("Accept", "application/json");
+    });
+    builder.Services.Configure<RerankerOptions>(builder.Configuration.GetSection("Reranker"));
+    builder.Services.AddScoped<ICrossEncoderReranker, CohereCrossEncoderReranker>();
+}
+else
+{
+    builder.Services.AddSingleton<ICrossEncoderReranker, NullCrossEncoderReranker>();
+}
+
+// ── Generation (chat, prompt, guardrail, model router, groundedness) ─────────
 builder.Services.AddScoped<IPromptBuilder, TemplatePromptBuilder>();
 builder.Services.AddScoped<IChatCompletionPort, OpenAIChatAdapter>();
 builder.Services.AddScoped<IAnswerGuardrail, CitationPresenceGuardrail>();
+builder.Services.AddScoped<IGroundednessCheck, LlmGroundednessCheck>();
+builder.Services.AddSingleton<IModelRouter, ComplexityModelRouter>();
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ISemanticCache, QdrantSemanticCache>();
@@ -232,6 +265,8 @@ app.MapAdminEndpoints();
 app.MapUsersEndpoints();
 app.MapDocumentsEndpoints();
 app.MapChatEndpoints();
+app.MapChatSessionEndpoints();
+app.MapFeedbackEndpoints();
 app.MapUsageEndpoints();
 
 app.MapGet("/health", (StreamMetrics m, LlmGate g) => Results.Ok(new

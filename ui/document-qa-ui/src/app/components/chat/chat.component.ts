@@ -1,7 +1,9 @@
-import { Component, signal, ElementRef, viewChild, effect, inject } from '@angular/core';
+import { Component, signal, ElementRef, viewChild, effect, inject, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute, RouterModule } from '@angular/router';
 import { ChatService } from '../../services/chat.service';
 import { AuthService } from '../../services/auth.service';
+import { ChatSessionService } from '../../services/chat-session.service';
 import { ChatMessage, HistoryEntry } from '../../models/chat.models';
 
 const TOOL_LABELS: Record<string, string> = {
@@ -12,22 +14,24 @@ const TOOL_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, RouterModule],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.scss'
 })
-export class ChatComponent {
+export class ChatComponent implements OnInit {
   messages    = signal<ChatMessage[]>([]);
   question    = signal('');
   isLoading   = signal(false);
-  readonly useAgent = true;
-  usePrivate  = signal(false);
+  sessionId   = signal<string | null>(null);
 
-  readonly auth = inject(AuthService);
+  readonly auth           = inject(AuthService);
+  private readonly chatService    = inject(ChatService);
+  private readonly sessionService = inject(ChatSessionService);
+  private readonly route          = inject(ActivatedRoute);
 
   private readonly scrollContainer = viewChild<ElementRef>('scrollContainer');
 
-  constructor(private readonly chatService: ChatService) {
+  constructor() {
     effect(() => {
       this.messages();
       const el = this.scrollContainer()?.nativeElement as HTMLElement | undefined;
@@ -35,9 +39,44 @@ export class ChatComponent {
     });
   }
 
+  ngOnInit(): void {
+    this.route.queryParamMap.subscribe(params => {
+      const sid = params.get('session');
+      if (sid && sid !== this.sessionId()) {
+        this.sessionId.set(sid);
+        this.loadHistory(sid);
+      } else if (!sid && this.sessionId()) {
+        this.sessionId.set(null);
+        this.messages.set([]);
+      }
+    });
+  }
+
+  private async loadHistory(sessionId: string): Promise<void> {
+    try {
+      const session = await this.sessionService.get(sessionId);
+      const msgs: ChatMessage[] = session.messages.map(m => ({
+        role:    m.role,
+        content: m.content,
+        sources: m.sourcesJson ? JSON.parse(m.sourcesJson) : [],
+        costUsd: m.costUsd > 0 ? m.costUsd : undefined,
+      }));
+      this.messages.set(msgs);
+    } catch {
+      this.messages.set([]);
+    }
+  }
+
   async sendMessage(): Promise<void> {
     const q = this.question().trim();
     if (!q || this.isLoading()) return;
+
+    // Auto-title the session after first user message
+    const sid = this.sessionId();
+    if (sid && this.messages().filter(m => m.role === 'user').length === 0) {
+      const title = q.slice(0, 60);
+      this.sessionService.rename(sid, title).catch(() => {});
+    }
 
     this.messages.update(msgs => [...msgs, { role: 'user', content: q, sources: [] }]);
     this.question.set('');
@@ -56,8 +95,8 @@ export class ChatComponent {
 
     try {
       for await (const event of this.chatService.streamAnswer(q, {
-        agent:   this.useAgent,
-        private: this.usePrivate(),
+        agent:     true,
+        sessionId: sid ?? undefined,
         history,
       })) {
         if (event.type === 'tool_call' && event.toolCall) {
@@ -129,6 +168,23 @@ export class ChatComponent {
         return updated;
       });
       this.isLoading.set(false);
+    }
+  }
+
+  async sendFeedback(msgIndex: number, rating: 1 | -1): Promise<void> {
+    const msg = this.messages()[msgIndex];
+    if (!msg || msg.role !== 'assistant') return;
+
+    this.messages.update(msgs => {
+      const updated = [...msgs];
+      updated[msgIndex] = { ...updated[msgIndex], feedback: rating };
+      return updated;
+    });
+
+    try {
+      await this.chatService.sendFeedback(msg.messageId ?? null, rating);
+    } catch {
+      // non-critical — silently ignore
     }
   }
 

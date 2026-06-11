@@ -20,14 +20,14 @@ public sealed class LlmQueryProcessor(
         new(@"\b\d+/\d+-\d+\b", RegexOptions.Compiled);
 
     private const string SystemPrompt = """
-        You are a query expansion assistant for a document retrieval system.
+        You are a query analysis assistant for a document retrieval system.
         Given the user's question, return a JSON object with:
-        - "search_text": an expanded version of the query including synonyms, full form of acronyms,
-          and related official terminology that might appear in formal documents.
-        - "keywords": a JSON array of exact strings to match (resolution numbers, policy names,
-          proper-noun titles, document section headings). Include the original phrasing if it's a specific ID or name.
+        - "search_text": expanded query including synonyms, acronyms, related official terminology.
+        - "keywords": array of exact strings to match (resolution numbers, policy names, section headings, IDs).
+        - "intent": one of "qa" (factual question), "summary" (summarize a doc/topic), "comparison" (compare items), "lookup" (find specific item).
+        - "sub_queries": if the question has multiple parts, list each as a separate question string. Empty array for single-part questions.
         Return ONLY valid JSON, no explanation.
-        Example: {"search_text": "Remote Employment Policy telecommuting work from home rules", "keywords": ["Remote Employment Policy", "Telecommuting"]}
+        Example: {"search_text": "Remote Employment Policy telecommuting work from home", "keywords": ["Remote Employment Policy"], "intent": "qa", "sub_queries": []}
         """;
 
     public async Task<ProcessedQuery> ProcessAsync(string rawQuery, CancellationToken ct)
@@ -54,23 +54,36 @@ public sealed class LlmQueryProcessor(
                 ? st.GetString() ?? rawQuery
                 : rawQuery;
 
+            var intent = root.TryGetProperty("intent", out var intentEl)
+                ? intentEl.GetString() ?? "qa"
+                : "qa";
+
             var llmKeywords = root.TryGetProperty("keywords", out var kw) && kw.ValueKind == JsonValueKind.Array
                 ? kw.EnumerateArray()
                     .Select(e => e.GetString())
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Cast<string>()
                     .ToList()
-                : [];
+                : (IReadOnlyList<string>)[];
+
+            var subQueries = root.TryGetProperty("sub_queries", out var sq) && sq.ValueKind == JsonValueKind.Array
+                ? sq.EnumerateArray()
+                    .Select(e => e.GetString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Cast<string>()
+                    .ToList()
+                : (IReadOnlyList<string>)[];
 
             // Merge deterministic + LLM keywords, deduplicated
             var allKeywords = deterministicKeywords
                 .Union(llmKeywords, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            logger.LogInformation("Query expansion: '{Raw}' → search='{Search}', keywords={KwCount}",
-                rawQuery[..Math.Min(60, rawQuery.Length)], searchText[..Math.Min(60, searchText.Length)], allKeywords.Count);
+            logger.LogInformation(
+                "Query processed: intent={Intent}, search='{Search}', keywords={KwCount}, subQueries={SqCount}",
+                intent, searchText[..Math.Min(60, searchText.Length)], allKeywords.Count, subQueries.Count);
 
-            return new ProcessedQuery(searchText, Keywords: allKeywords);
+            return new ProcessedQuery(searchText, intent, allKeywords, subQueries);
         }
         catch (Exception ex)
         {

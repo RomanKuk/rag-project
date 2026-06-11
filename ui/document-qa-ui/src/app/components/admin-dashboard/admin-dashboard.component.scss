@@ -157,3 +157,56 @@
 
 .error-msg   { color: #f87171; font-size: 0.82rem; margin: 6px 0 0; }
 .success-msg { color: #4ade80; font-size: 0.82rem; margin: 6px 0 0; }
+
+.limit-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.limit-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+
+  &.unlimited { color: #94a3b8; }
+}
+
+.limit-input {
+  width: 70px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #6366f1;
+  background: #1e1e38;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.btn-edit-limit {
+  background: transparent;
+  border: none;
+  color: #6366f1;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 2px;
+  opacity: 0.6;
+  &:hover { opacity: 1; }
+}
+
+.btn-save {
+  background: transparent;
+  border: none;
+  color: #4ade80;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 2px;
+}
+
+.btn-cancel {
+  background: transparent;
+  border: none;
+  color: #f87171;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 2px;
+}

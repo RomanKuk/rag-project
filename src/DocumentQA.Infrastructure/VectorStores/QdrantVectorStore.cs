@@ -42,6 +42,12 @@ public sealed class QdrantVectorStore : IVectorStore
             point.Payload["tenant_id"]     = scope.TenantId;
             point.Payload["visibility"]    = chunk.Metadata.Visibility.ToString().ToLowerInvariant();
             point.Payload["owner_user_id"] = chunk.Metadata.OwnerUserId ?? string.Empty;
+            if (chunk.Metadata.ChatId.HasValue)
+                point.Payload["chat_id"] = chunk.Metadata.ChatId.Value.ToString();
+            if (chunk.Metadata.Language is { Length: > 0 } lang)
+                point.Payload["language"] = lang;
+            if (chunk.Metadata.ContextBlurb is { Length: > 0 } blurb)
+                point.Payload["context_blurb"] = blurb;
             point.Payload["documentName"]  = chunk.Metadata.DocumentName;
             point.Payload["page"]          = chunk.Metadata.Page;
             point.Payload["chunkIndex"]    = chunk.Metadata.ChunkIndex;
@@ -216,7 +222,51 @@ public sealed class QdrantVectorStore : IVectorStore
         _logger.LogInformation("Deleted document '{Name}' for tenant '{Tenant}'", documentName, scope.TenantId);
     }
 
+    public async Task DeleteByChatAsync(Guid chatId, CancellationToken ct)
+    {
+        await EnsureCollectionAsync(ct);
+        var filter = new Filter
+        {
+            Must =
+            {
+                new Condition { Field = new FieldCondition { Key = "chat_id", Match = new Match { Keyword = chatId.ToString() } } }
+            }
+        };
+        await _client.DeleteAsync(CollectionName, filter, cancellationToken: ct);
+        _logger.LogInformation("Deleted chat-scoped vectors for chatId='{ChatId}'", chatId);
+    }
+
     public async Task<long> CountDocumentsAsync(string tenantId, CancellationToken ct)
+    {
+        await EnsureCollectionAsync(ct);
+
+        var names  = new HashSet<string>();
+        PointId? offset = null;
+
+        while (true)
+        {
+            var response = await _client.ScrollAsync(
+                CollectionName,
+                filter: TenantOnlyFilter(tenantId),
+                limit: 250,
+                offset: offset,
+                payloadSelector: true,
+                cancellationToken: ct);
+
+            foreach (var point in response.Result)
+            {
+                if (point.Payload.TryGetValue("documentName", out var dn))
+                    names.Add(dn.StringValue);
+            }
+
+            if (response.NextPageOffset is null) break;
+            offset = response.NextPageOffset;
+        }
+
+        return names.Count;
+    }
+
+    public async Task<long> CountChunksAsync(string tenantId, CancellationToken ct)
     {
         await EnsureCollectionAsync(ct);
         var result = await _client.CountAsync(
@@ -259,6 +309,27 @@ public sealed class QdrantVectorStore : IVectorStore
 
     private static Filter ScopeFilter(RetrievalScope scope)
     {
+        if (scope.Mode == ScopeMode.Chat && scope.ChatId.HasValue)
+        {
+            // Chat scope: OR(chat-specific docs, optionally shared tenant docs)
+            var chatFilter = new Filter();
+            chatFilter.Must.Add(new Condition { Field = new FieldCondition { Key = "tenant_id", Match = new Match { Keyword = scope.TenantId } } });
+            chatFilter.Must.Add(new Condition { Field = new FieldCondition { Key = "chat_id",   Match = new Match { Keyword = scope.ChatId.Value.ToString() } } });
+
+            var outerFilter = new Filter();
+            outerFilter.Should.Add(new Condition { Filter = chatFilter });
+
+            if (scope.IncludeSharedDocs)
+            {
+                var sharedFilter = new Filter();
+                sharedFilter.Must.Add(new Condition { Field = new FieldCondition { Key = "tenant_id",  Match = new Match { Keyword = scope.TenantId } } });
+                sharedFilter.Must.Add(new Condition { Field = new FieldCondition { Key = "visibility", Match = new Match { Keyword = "shared" } } });
+                outerFilter.Should.Add(new Condition { Filter = sharedFilter });
+            }
+
+            return outerFilter;
+        }
+
         var filter = new Filter();
         foreach (var c in ScopeConditions(scope))
             filter.Must.Add(c);
@@ -292,7 +363,10 @@ public sealed class QdrantVectorStore : IVectorStore
                     TenantId     = r.Payload.TryGetValue("tenant_id",   out var tid) ? tid.StringValue  : "public",
                     Visibility   = r.Payload.TryGetValue("visibility",  out var vis) && vis.StringValue == "private"
                         ? DocumentVisibility.Private : DocumentVisibility.Shared,
-                    OwnerUserId  = r.Payload.TryGetValue("owner_user_id", out var uid) ? uid.StringValue : null,
+                    OwnerUserId  = r.Payload.TryGetValue("owner_user_id", out var uid)  ? uid.StringValue  : null,
+                    ChatId       = r.Payload.TryGetValue("chat_id",       out var cid)  && Guid.TryParse(cid.StringValue, out var cidGuid) ? cidGuid : null,
+                    Language     = r.Payload.TryGetValue("language",      out var lng)  ? lng.StringValue  : null,
+                    ContextBlurb = r.Payload.TryGetValue("context_blurb", out var cb)   ? cb.StringValue   : null,
                 }
             },
             r.Score
@@ -318,6 +392,7 @@ public sealed class QdrantVectorStore : IVectorStore
             await _client.CreatePayloadIndexAsync(CollectionName, "tenant_id",     PayloadSchemaType.Keyword, cancellationToken: ct);
             await _client.CreatePayloadIndexAsync(CollectionName, "visibility",    PayloadSchemaType.Keyword, cancellationToken: ct);
             await _client.CreatePayloadIndexAsync(CollectionName, "owner_user_id", PayloadSchemaType.Keyword, cancellationToken: ct);
+            await _client.CreatePayloadIndexAsync(CollectionName, "chat_id",       PayloadSchemaType.Keyword, cancellationToken: ct);
             _logger.LogInformation("Created payload indexes on collection '{Collection}'", CollectionName);
         }
     }

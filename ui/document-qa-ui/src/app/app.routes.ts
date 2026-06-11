@@ -22,6 +22,7 @@ export const routes: Routes = [
   },
   {
     path: '',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./components/chat/chat.component').then(m => m.ChatComponent),
   },

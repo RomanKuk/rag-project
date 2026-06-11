@@ -5,6 +5,7 @@ public interface IUsageAnalytics
     Task<IReadOnlyList<TenantMetrics>> GetTenantMetricsAsync(CancellationToken ct = default);
     Task<OverallMetrics>               GetOverallMetricsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<DailyBucket>>   GetTimeSeriesAsync(int days, string? tenantId = null, CancellationToken ct = default);
+    Task<long>                         GetTenantTokensTodayAsync(string tenantSlug, CancellationToken ct = default);
 }
 
 public sealed record TenantMetrics(

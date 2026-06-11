@@ -23,4 +23,24 @@ public sealed class RagOptions
     // OCR fallback for near-empty PDF pages (requires tesseract + poppler in Docker image)
     public bool OcrEnabled { get; init; } = true;
     public int OcrMinWords { get; init; } = 40;
+
+    // Token-aware context assembly
+    public int MaxContextTokens { get; init; } = 6000;
+
+    // History trimming (in turns = user+assistant pairs)
+    public int MaxHistoryTurns { get; init; } = 6;
+
+    // Model routing: cheap model for simple queries, strong for multi-hop/analytical
+    public string SimpleModel  { get; init; } = "gpt-4o-mini";
+    public string ComplexModel { get; init; } = "gpt-4o";
+
+    // Multimodal table/image extraction (requires vision model — costly)
+    public bool MultimodalEnabled { get; init; } = false;
+
+    // Contextual chunk enrichment (Anthropic "contextual retrieval" style)
+    public bool EnrichmentEnabled { get; init; } = false;
+
+    // Configurable embedding model
+    public string EmbeddingModel      { get; init; } = "text-embedding-3-small";
+    public int    EmbeddingDimensions { get; init; } = 1536;
 }

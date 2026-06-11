@@ -10,6 +10,7 @@ Prerequisites:
   - Documents from golden_set.json already ingested
   - OPENAI_API_KEY environment variable set (Ragas uses it for judge-LLM scoring)
   - Optional: API_KEY_A / API_KEY_B env vars for tenant-isolation test
+  - Optional: feedback_examples.json (exported from DB) to augment the golden set
 """
 
 import json
@@ -35,6 +36,8 @@ API_URL       = os.getenv("API_URL",     "http://localhost:5000")
 QDRANT_URL    = os.getenv("QDRANT_URL",  "http://localhost:6333")
 CHAT_ENDPOINT = f"{API_URL}/api/chat"
 UPLOAD_ENDPOINT = f"{API_URL}/api/documents/upload"
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Optional API keys for tenant-isolation test
 API_KEY_A = os.getenv("API_KEY_A", "")
@@ -99,7 +102,41 @@ def ask(question: str, api_key: str = "", agent: bool = False) -> dict:
     return {"answer": full_answer, "sources": sources, "tool_calls": tool_calls}
 
 
-def build_dataset(golden_set: list[dict], api_key: str = "") -> Dataset:
+def load_feedback_examples() -> list[dict]:
+    """
+    Load positively-rated feedback examples from feedback_examples.json (if present).
+
+    The file must contain a JSON array matching golden_set.json structure:
+      [{"question": "...", "expected_answer": "...", "source_document": "", "source_page": 0}]
+
+    Export from DB:
+      SELECT cm_user.content AS question,
+             cm_asst.content AS expected_answer,
+             '' AS source_document, 0 AS source_page
+      FROM "Feedbacks" f
+      JOIN "ChatMessages" cm_asst ON cm_asst."Id" = f."MessageId"
+      JOIN "ChatMessages" cm_user ON cm_user."SessionId" = cm_asst."SessionId"
+                                 AND cm_user."Role" = 'user'
+                                 AND cm_user."CreatedAt" < cm_asst."CreatedAt"
+      WHERE f."Rating" = 1
+      ORDER BY cm_user."CreatedAt" DESC
+      LIMIT 50;
+    """
+    feedback_path = os.path.join(os.path.dirname(__file__), "feedback_examples.json")
+    if not os.path.exists(feedback_path):
+        return []
+    try:
+        with open(feedback_path) as f:
+            examples = json.load(f)
+        print(f"Loaded {len(examples)} feedback-derived examples from feedback_examples.json.")
+        return examples
+    except Exception as exc:
+        print(f"Warning: could not load feedback_examples.json ({exc})")
+        return []
+
+
+def build_dataset(golden_set: list[dict], api_key: str = "") -> tuple[Dataset, list[dict]]:
+    """Ask every question; return the Ragas Dataset and raw rows for additional checks."""
     rows = []
     for item in golden_set:
         print(f"  Asking: {item['question'][:60]}...")
@@ -111,10 +148,11 @@ def build_dataset(golden_set: list[dict], api_key: str = "") -> Dataset:
         print(f"    Answer ({len(result['answer'])} chars): {result['answer'][:120]!r}")
         print(f"    Contexts: {len(contexts)} chunks, sizes={[len(c) for c in contexts]}")
         rows.append({
-            "question":     item["question"],
-            "answer":       result["answer"],
-            "contexts":     contexts,
-            "ground_truth": item["expected_answer"],
+            "question":           item["question"],
+            "answer":             result["answer"],
+            "contexts":           contexts,
+            "ground_truth":       item["expected_answer"],
+            "expects_no_context": item.get("source_document", "") == "",
         })
     features = Features({
         "question":     Value("string"),
@@ -122,7 +160,67 @@ def build_dataset(golden_set: list[dict], api_key: str = "") -> Dataset:
         "contexts":     Sequence(Value("string")),
         "ground_truth": Value("string"),
     })
-    return Dataset.from_list(rows, features=features)
+    ragas_rows = [{k: v for k, v in r.items() if k in ("question", "answer", "contexts", "ground_truth")}
+                  for r in rows]
+    return Dataset.from_list(ragas_rows, features=features), rows
+
+
+# ── Retrieval coverage ────────────────────────────────────────────────────────
+
+def compute_retrieval_coverage(rows: list[dict]) -> float:
+    """
+    Fraction of contextual questions where >= 1 chunk was retrieved.
+    Out-of-domain / no-context questions are excluded from the denominator —
+    we expect and want empty contexts for those.
+    """
+    contextual = [r for r in rows if not r["expects_no_context"]]
+    if not contextual:
+        return 1.0
+    covered = sum(1 for r in contextual if len(r["contexts"]) > 0)
+    return covered / len(contextual)
+
+
+# ── Toxicity check ────────────────────────────────────────────────────────────
+
+def run_toxicity_check(rows: list[dict]) -> dict:
+    """
+    Call the OpenAI moderation endpoint on every generated answer.
+    Returns {"passed": bool, "flagged_count": int, "flagged_questions": list[str]}.
+    Skips gracefully if OPENAI_API_KEY is not set.
+    """
+    if not OPENAI_API_KEY:
+        print("\n[Toxicity check] SKIPPED — OPENAI_API_KEY not set.")
+        return {"passed": True, "flagged_count": 0, "flagged_questions": [], "skipped": True}
+
+    print("\n[Toxicity check] Checking generated answers via OpenAI moderation API...")
+    flagged: list[str] = []
+
+    with httpx.Client(timeout=30) as client:
+        for row in rows:
+            answer = row["answer"].strip()
+            if not answer:
+                continue
+            try:
+                resp = client.post(
+                    "https://api.openai.com/v1/moderations",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                             "Content-Type": "application/json"},
+                    json={"input": answer},
+                )
+                resp.raise_for_status()
+                result_data = resp.json()
+                if result_data["results"][0]["flagged"]:
+                    categories = [k for k, v in result_data["results"][0]["categories"].items() if v]
+                    flagged.append(f"Q: {row['question'][:60]!r} → {categories}")
+                    print(f"    FLAGGED: {row['question'][:60]!r} → {categories}")
+            except Exception as exc:
+                print(f"    Warning: moderation check failed for '{row['question'][:40]}' ({exc})")
+
+    total = len(rows)
+    clean = total - len(flagged)
+    print(f"  Results: {clean}/{total} clean, {len(flagged)} flagged.")
+    return {"passed": len(flagged) == 0, "flagged_count": len(flagged),
+            "flagged_questions": flagged, "skipped": False}
 
 
 # ── Tenant isolation test ────────────────────────────────────────────────────
@@ -202,6 +300,10 @@ def main() -> None:
     with open(golden_path) as f:
         golden = json.load(f)
 
+    # Augment with positively-rated feedback examples (if exported)
+    feedback_examples = load_feedback_examples()
+    golden = golden + feedback_examples
+
     clear_semantic_cache()
 
     try:
@@ -215,7 +317,7 @@ def main() -> None:
     eval_api_key = API_KEY_A or ""
 
     print(f"Running Ragas evaluation over {len(golden)} questions...")
-    dataset = build_dataset(golden, api_key=eval_api_key)
+    dataset, raw_rows = build_dataset(golden, api_key=eval_api_key)
 
     results = evaluate(
         dataset,
@@ -231,11 +333,30 @@ def main() -> None:
     print("\n=== Ragas Evaluation Results ===")
     print(results)
 
-    faithfulness_score = results.get("faithfulness", 0)
+    faithfulness_score   = results.get("faithfulness",    0)
+    relevancy_score      = results.get("answer_relevancy", 0)
+    context_recall_score = results.get("context_recall",   0)
+
     if faithfulness_score >= 0.8:
         print(f"\nPASS: faithfulness={faithfulness_score:.2f} >= 0.80")
     else:
         print(f"\nFAIL: faithfulness={faithfulness_score:.2f} < 0.80 (target)")
+
+    # ── Retrieval coverage ───────────────────────────────────────────────────
+    coverage = compute_retrieval_coverage(raw_rows)
+    coverage_ok = coverage >= 0.90
+    print(f"\n[Retrieval coverage] {coverage:.0%} of contextual questions retrieved >= 1 chunk "
+          f"({'PASS' if coverage_ok else 'FAIL'}, target >= 90%)")
+
+    # ── Toxicity check ───────────────────────────────────────────────────────
+    toxicity_result = run_toxicity_check(raw_rows)
+    toxicity_ok = toxicity_result["passed"]
+    if toxicity_result.get("skipped"):
+        toxicity_label = "SKIPPED"
+    elif toxicity_ok:
+        toxicity_label = "PASS (0 flagged)"
+    else:
+        toxicity_label = f"FAIL ({toxicity_result['flagged_count']} flagged)"
 
     # ── Phase 1: tenant isolation ────────────────────────────────────────────
     isolation_ok = run_tenant_isolation_test()
@@ -245,11 +366,24 @@ def main() -> None:
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print("\n=== Test Summary ===")
-    print(f"  Ragas faithfulness : {'PASS' if faithfulness_score >= 0.8 else 'FAIL'} ({faithfulness_score:.2f})")
-    print(f"  Tenant isolation   : {'PASS' if isolation_ok else 'FAIL'}")
-    print(f"  Tool selection     : {'PASS' if tool_ok else 'FAIL'}")
+    print(f"  Ragas faithfulness    : {'PASS' if faithfulness_score >= 0.8 else 'FAIL'} ({faithfulness_score:.2f})")
+    print(f"  Answer relevancy      : {relevancy_score:.2f}")
+    print(f"  Context recall        : {context_recall_score:.2f}")
+    print(f"  Retrieval coverage    : {'PASS' if coverage_ok else 'FAIL'} ({coverage:.0%})")
+    print(f"  Toxicity              : {toxicity_label}")
+    print(f"  Tenant isolation      : {'PASS' if isolation_ok else 'FAIL'}")
+    print(f"  Tool selection        : {'PASS' if tool_ok else 'FAIL'}")
+    if feedback_examples:
+        print(f"  Feedback examples     : {len(feedback_examples)} augmented from feedback_examples.json")
 
-    if not (faithfulness_score >= 0.8 and isolation_ok and tool_ok):
+    hard_failures = [
+        faithfulness_score >= 0.8,
+        coverage_ok,
+        toxicity_ok or toxicity_result.get("skipped", False),
+        isolation_ok,
+        tool_ok,
+    ]
+    if not all(hard_failures):
         raise SystemExit(1)
 
 

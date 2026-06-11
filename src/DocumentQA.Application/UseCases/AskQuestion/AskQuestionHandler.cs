@@ -8,6 +8,7 @@ using DocumentQA.Application.Abstractions.Security;
 using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
 using DocumentQA.Application.Telemetry;
+using DocumentQA.Domain.Retrieval;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -31,6 +32,9 @@ public sealed class AskQuestionHandler
     private readonly IChatCompletionPort _chat;
     private readonly ISemanticCache _cache;
     private readonly ISuspiciousActivityLog _suspiciousLog;
+    private readonly IAnswerGuardrail _citationGuardrail;
+    private readonly IGroundednessCheck _groundednessCheck;
+    private readonly ISafetyFilter _safetyFilter;
     private readonly RagOptions _options;
     private readonly ILogger<AskQuestionHandler> _logger;
 
@@ -43,19 +47,25 @@ public sealed class AskQuestionHandler
         IChatCompletionPort chat,
         ISemanticCache cache,
         ISuspiciousActivityLog suspiciousLog,
+        IAnswerGuardrail citationGuardrail,
+        IGroundednessCheck groundednessCheck,
+        ISafetyFilter safetyFilter,
         IOptions<RagOptions> options,
         ILogger<AskQuestionHandler> logger)
     {
-        _queryProcessor = queryProcessor;
-        _embedding = embedding;
-        _vectorStore = vectorStore;
-        _reranker = reranker;
-        _promptBuilder = promptBuilder;
-        _chat = chat;
-        _cache = cache;
-        _suspiciousLog = suspiciousLog;
-        _options = options.Value;
-        _logger = logger;
+        _queryProcessor     = queryProcessor;
+        _embedding          = embedding;
+        _vectorStore        = vectorStore;
+        _reranker           = reranker;
+        _promptBuilder      = promptBuilder;
+        _chat               = chat;
+        _cache              = cache;
+        _suspiciousLog      = suspiciousLog;
+        _citationGuardrail  = citationGuardrail;
+        _groundednessCheck  = groundednessCheck;
+        _safetyFilter       = safetyFilter;
+        _options            = options.Value;
+        _logger             = logger;
     }
 
     public async IAsyncEnumerable<AskQuestionChunk> HandleAsync(
@@ -78,8 +88,11 @@ public sealed class AskQuestionHandler
             queryVector = await _embedding.EmbedAsync(processed.SearchText, ct);
             embedActivity?.SetTag("embedding.dims", queryVector.Length);
             embedActivity?.SetTag("keywords.count", processed.Keywords.Count);
-            _logger.LogInformation("Embedding generated ({Dims} dims), {KwCount} keywords extracted",
-                queryVector.Length, processed.Keywords.Count);
+            embedActivity?.SetTag("intent", processed.Intent);
+            embedActivity?.SetTag("sub_queries.count", processed.SubQueries.Count);
+            _logger.LogInformation(
+                "Embedding generated ({Dims} dims), {KwCount} keywords, intent={Intent}, subQueries={SqCount}",
+                queryVector.Length, processed.Keywords.Count, processed.Intent, processed.SubQueries.Count);
         }
 
         // ── Semantic cache lookup ─────────────────────────────────────────
@@ -103,8 +116,10 @@ public sealed class AskQuestionHandler
             yield break;
         }
 
-        // ── Vector search ─────────────────────────────────────────────────
-        var candidates = await SearchWithSpanAsync(queryVector, processed.Keywords, scope, ct);
+        // ── Vector search (multi-query if sub-queries present) ────────────
+        var candidates = processed.SubQueries.Count > 0
+            ? await SearchMultiQueryAsync(question, processed, queryVector, scope, ct)
+            : await SearchWithSpanAsync(queryVector, processed.Keywords, scope, ct);
 
         _logger.LogInformation("Search returned {Count} candidates (minScore={MinScore})",
             candidates.Count, _options.MinRelevanceScore);
@@ -188,6 +203,31 @@ public sealed class AskQuestionHandler
             }
         }
 
+        // ── Citation guardrail ────────────────────────────────────────────
+        var citationVerdict = _citationGuardrail.Check(response, prompt.Sources);
+        rootActivity?.SetTag("citation.passed", citationVerdict.Passed);
+        if (!citationVerdict.Passed)
+        {
+            _logger.LogWarning("Citation guardrail failed: {Reason}", citationVerdict.Reason);
+            response += "\n\n⚠️ Note: The answer may not be fully supported by the retrieved documents.";
+        }
+
+        // ── Groundedness check (fire-and-forget enrichment of telemetry) ──
+        _ = Task.Run(async () =>
+        {
+            var groundedness = await _groundednessCheck.CheckAsync(response, ranked, CancellationToken.None);
+            _logger.LogInformation("Groundedness: {Grounded}", groundedness.IsGrounded);
+        });
+
+        // ── Safety filter on output ───────────────────────────────────────
+        var outputSafety = await _safetyFilter.CheckAsync(response, ct);
+        rootActivity?.SetTag("safety.output.passed", outputSafety.IsSafe);
+        if (!outputSafety.IsSafe)
+        {
+            _logger.LogWarning("Output safety filter flagged response as: {Category}", outputSafety.Category);
+            _ = _suspiciousLog.LogResponseAsync(question, $"safety:{outputSafety.Category}");
+        }
+
         // ── Yield usage summary ───────────────────────────────────────────
         var inputTokens  = (prompt.SystemPrompt.Length + prompt.UserPrompt.Length) / 4;
         var outputTokens = response.Length / 4;
@@ -215,6 +255,44 @@ public sealed class AskQuestionHandler
             queryVector, keywords, _options.RetrievalTopK, _options.MinRelevanceScore, scope, ct);
         activity?.SetTag("results.count", result.Count);
         return result;
+    }
+
+    private async Task<IReadOnlyList<Domain.Retrieval.RetrievedChunk>> SearchMultiQueryAsync(
+        string question,
+        ProcessedQuery processed,
+        float[] queryVector,
+        RetrievalScope scope,
+        CancellationToken ct)
+    {
+        using var activity = RagActivitySource.Source.StartActivity("vector-search");
+        activity?.SetTag("sub_queries.count", processed.SubQueries.Count);
+
+        // Primary retrieval
+        var primary = await _vectorStore.SearchHybridAsync(
+            queryVector, processed.Keywords, _options.RetrievalTopK, _options.MinRelevanceScore, scope, ct);
+
+        var allById = primary.ToDictionary(c => c.Chunk.Id);
+
+        // Sub-query retrieval (if any)
+        foreach (var subQuery in processed.SubQueries.Take(3))
+        {
+            try
+            {
+                var subVector = await _embedding.EmbedAsync(subQuery, ct);
+                var subResults = await _vectorStore.SearchHybridAsync(
+                    subVector, [], _options.RetrievalTopK / 2, _options.MinRelevanceScore, scope, ct);
+
+                foreach (var r in subResults)
+                    allById.TryAdd(r.Chunk.Id, r);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Sub-query retrieval failed for '{SubQuery}'", subQuery);
+            }
+        }
+
+        activity?.SetTag("results.count", allById.Count);
+        return allById.Values.ToList();
     }
 
     private static IEnumerable<string> SplitIntoTokens(string text)

@@ -26,8 +26,12 @@ export class AdminDashboardComponent implements OnInit {
   newOwnerEmail        = signal('');
   newOwnerPassword     = signal('');
   newOwnerDisplayName  = signal('');
+  newDailyTokenLimit   = signal(0);
   createError          = signal('');
   createSuccess        = signal('');
+
+  // Inline daily-limit editor: { tenantId (guid), value }
+  editLimit = signal<{ id: string; value: number } | null>(null);
 
   // Timeseries drill-down
   selectedTenantId = signal<string | undefined>(undefined);
@@ -82,7 +86,8 @@ export class AdminDashboardComponent implements OnInit {
     this.createError.set('');
     this.createSuccess.set('');
     this.adminSvc.createTenant(
-      this.newTenantName(), this.newOwnerEmail(), this.newOwnerPassword(), this.newOwnerDisplayName() || undefined
+      this.newTenantName(), this.newOwnerEmail(), this.newOwnerPassword(),
+      this.newOwnerDisplayName() || undefined, this.newDailyTokenLimit()
     ).subscribe({
       next: r => {
         this.createSuccess.set(`Tenant '${this.newTenantName()}' created (slug: ${r.slug})`);
@@ -90,10 +95,39 @@ export class AdminDashboardComponent implements OnInit {
         this.newOwnerEmail.set('');
         this.newOwnerPassword.set('');
         this.newOwnerDisplayName.set('');
+        this.newDailyTokenLimit.set(0);
         this.loadDashboard();
       },
       error: err => this.createError.set(err.error?.error ?? 'Failed to create tenant.'),
     });
+  }
+
+  startEditLimit(tenantId: string): void {
+    const tenant = this.tenants().find(t => t.id === tenantId);
+    if (!tenant) return;
+    this.editLimit.set({ id: tenantId, value: tenant.dailyTokenLimit });
+  }
+
+  saveLimit(): void {
+    const state = this.editLimit();
+    if (!state) return;
+    this.adminSvc.updateTenant(state.id, { dailyTokenLimit: state.value }).subscribe({
+      next: updated => {
+        this.tenants.update(list =>
+          list.map(t => t.id === updated.id ? { ...t, dailyTokenLimit: updated.dailyTokenLimit } : t)
+        );
+        this.editLimit.set(null);
+      },
+      error: () => this.editLimit.set(null),
+    });
+  }
+
+  tenantLimit(tenantSlug: string): number {
+    return this.tenants().find(t => t.slug === tenantSlug)?.dailyTokenLimit ?? 0;
+  }
+
+  tenantId(tenantSlug: string): string {
+    return this.tenants().find(t => t.slug === tenantSlug)?.id ?? '';
   }
 
   private _buildBarChart(tenants: TenantMetrics[]): void {

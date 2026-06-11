@@ -19,6 +19,12 @@ public sealed class EfTenantRepository(AppDbContext db) : ITenantRepository
     public async Task AddAsync(Tenant tenant, CancellationToken ct = default)
         => await db.Tenants.AddAsync(tenant, ct);
 
+    public Task UpdateAsync(Tenant tenant, CancellationToken ct = default)
+    {
+        db.Tenants.Update(tenant);
+        return Task.CompletedTask;
+    }
+
     public Task SaveAsync(CancellationToken ct = default)
         => db.SaveChangesAsync(ct);
 }

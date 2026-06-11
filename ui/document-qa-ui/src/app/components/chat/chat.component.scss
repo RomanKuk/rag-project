@@ -187,6 +187,25 @@
   color: #3949ab;
 }
 
+.session-badge {
+  font-size: 0.75rem;
+  color: #888;
+  font-family: monospace;
+}
+
+.btn-feedback {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 2px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+
+  &:hover { opacity: 0.8; }
+  &.active { opacity: 1; }
+}
+
 .input-area {
   display: flex;
   gap: 8px;

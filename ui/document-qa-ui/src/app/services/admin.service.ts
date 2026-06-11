@@ -14,6 +14,8 @@ export interface TenantMetrics {
   p95LatencyMs: number | null;
   userCount: number;
   documentCount: number;
+  chunkCount: number;
+  dailyTokenLimit?: number;
 }
 
 export interface OverallMetrics {
@@ -39,6 +41,7 @@ export interface TenantSummary {
   name: string;
   slug: string;
   isActive: boolean;
+  dailyTokenLimit: number;
   createdAt: string;
 }
 
@@ -60,10 +63,17 @@ export class AdminService {
     return this.http.get<TenantSummary[]>(`${environment.apiUrl}/api/admin/tenants`);
   }
 
-  createTenant(name: string, ownerEmail: string, ownerPassword: string, ownerDisplayName?: string): Observable<{ tenantId: string; slug: string; ownerId: string }> {
+  createTenant(
+    name: string, ownerEmail: string, ownerPassword: string,
+    ownerDisplayName?: string, dailyTokenLimit?: number
+  ): Observable<{ tenantId: string; slug: string; ownerId: string }> {
     return this.http.post<{ tenantId: string; slug: string; ownerId: string }>(
       `${environment.apiUrl}/api/admin/tenants`,
-      { name, ownerEmail, ownerPassword, ownerDisplayName }
+      { name, ownerEmail, ownerPassword, ownerDisplayName, dailyTokenLimit: dailyTokenLimit ?? 0 }
     );
+  }
+
+  updateTenant(id: string, patch: { dailyTokenLimit?: number; isActive?: boolean }): Observable<TenantSummary> {
+    return this.http.patch<TenantSummary>(`${environment.apiUrl}/api/admin/tenants/${id}`, patch);
   }
 }

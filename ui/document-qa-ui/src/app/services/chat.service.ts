@@ -1,7 +1,8 @@
 import { Injectable, inject } from '@angular/core';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { HistoryEntry, SourceReference } from '../models/chat.models';
-import { ApiKeyService } from './api-key.service';
 import { AuthService } from './auth.service';
 
 interface ServerChunk {
@@ -27,42 +28,48 @@ export interface StreamEvent {
 
 @Injectable({ providedIn: 'root' })
 export class ChatService {
-  private readonly apiUrl        = environment.apiUrl;
-  private readonly apiKeyService = inject(ApiKeyService);
-  private readonly authService   = inject(AuthService);
+  private readonly apiUrl      = environment.apiUrl;
+  private readonly authService = inject(AuthService);
+  private readonly http        = inject(HttpClient);
+
+  async sendFeedback(messageId: string | null, rating: 1 | -1, comment?: string): Promise<void> {
+    const token = this.authService.token();
+    const headers = token ? new HttpHeaders({ Authorization: `Bearer ${token}` }) : new HttpHeaders();
+    await firstValueFrom(
+      this.http.post(
+        `${this.apiUrl}/api/chat/feedback`,
+        { messageId, rating, comment },
+        { headers }
+      )
+    );
+  }
 
   async *streamAnswer(
     question: string,
-    options: { agent?: boolean; private?: boolean; history?: HistoryEntry[] } = {}
+    options: { agent?: boolean; sessionId?: string; history?: HistoryEntry[] } = {}
   ): AsyncGenerator<StreamEvent> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-    // JWT takes priority; fall back to X-API-Key for programmatic / eval use
     const token = this.authService.token();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    } else {
-      const key = this.apiKeyService.get();
-      if (key) headers['X-API-Key'] = key;
-    }
+    if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const response = await fetch(`${this.apiUrl}/api/chat`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         question,
-        agent:   options.agent   ?? false,
-        private: options.private ?? false,
-        history: options.history ?? [],
+        agent:     options.agent     ?? true,
+        sessionId: options.sessionId ?? null,
+        history:   options.history   ?? [],
       }),
     });
 
     if (!response.ok) throw new Error(`API error ${response.status}`);
     if (!response.body) throw new Error('No response body');
 
-    const reader = response.body.getReader();
+    const reader  = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer    = '';
 
     while (true) {
       const { done, value } = await reader.read();

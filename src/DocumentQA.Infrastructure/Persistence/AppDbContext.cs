@@ -1,3 +1,4 @@
+using DocumentQA.Domain.Chat;
 using DocumentQA.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -5,9 +6,12 @@ namespace DocumentQA.Infrastructure.Persistence;
 
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    public DbSet<Tenant>   Tenants   { get; set; } = null!;
-    public DbSet<User>     Users     { get; set; } = null!;
-    public DbSet<UsageLog> UsageLogs { get; set; } = null!;
+    public DbSet<Tenant>      Tenants      { get; set; } = null!;
+    public DbSet<User>        Users        { get; set; } = null!;
+    public DbSet<UsageLog>    UsageLogs    { get; set; } = null!;
+    public DbSet<ChatSession> ChatSessions { get; set; } = null!;
+    public DbSet<ChatMessage> ChatMessages { get; set; } = null!;
+    public DbSet<Feedback>    Feedbacks    { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -41,6 +45,31 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasIndex(u => u.TenantId);
             e.HasIndex(u => u.CreatedAt);
             e.HasIndex(u => new { u.TenantId, u.CreatedAt });
+        });
+
+        mb.Entity<ChatSession>(e =>
+        {
+            e.HasKey(s => s.Id);
+            e.Property(s => s.TenantId).HasMaxLength(100).IsRequired();
+            e.HasIndex(s => new { s.TenantId, s.UserId });
+        });
+
+        mb.Entity<ChatMessage>(e =>
+        {
+            e.HasKey(m => m.Id);
+            e.HasOne(m => m.Session)
+             .WithMany(s => s.Messages)
+             .HasForeignKey(m => m.SessionId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(m => new { m.SessionId, m.CreatedAt });
+        });
+
+        mb.Entity<Feedback>(e =>
+        {
+            e.HasKey(f => f.Id);
+            e.Property(f => f.TenantId).HasMaxLength(100).IsRequired();
+            e.HasIndex(f => f.TenantId);
+            e.HasIndex(f => f.CreatedAt);
         });
     }
 }

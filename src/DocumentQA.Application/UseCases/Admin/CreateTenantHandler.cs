@@ -20,9 +20,10 @@ public sealed class CreateTenantHandler(
 
         var tenant = new Tenant
         {
-            Name     = req.Name,
-            Slug     = slug,
-            IsActive = true,
+            Name            = req.Name,
+            Slug            = slug,
+            IsActive        = true,
+            DailyTokenLimit = req.DailyTokenLimit,
         };
         await tenantRepo.AddAsync(tenant, ct);
         await tenantRepo.SaveAsync(ct);
@@ -48,7 +49,8 @@ public sealed record CreateTenantRequest(
     string? Slug,
     string  OwnerEmail,
     string  OwnerPassword,
-    string? OwnerDisplayName
+    string? OwnerDisplayName,
+    int     DailyTokenLimit = 0
 );
 
 public sealed record CreateTenantResult(Guid TenantId, string Slug, Guid OwnerId);

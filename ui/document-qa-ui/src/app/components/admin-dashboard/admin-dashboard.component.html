@@ -80,8 +80,9 @@
         <table class="metrics-table">
           <thead>
             <tr>
-              <th>Tenant</th><th>Requests</th><th>Tokens</th><th>Cost (USD)</th>
-              <th>Cache hit</th><th>Avg latency</th><th>Users</th><th>Docs</th>
+              <th>Tenant</th><th>Requests</th><th>Tokens (today)</th><th>Cost (USD)</th>
+              <th>Cache hit</th><th>Avg latency</th><th>Users</th><th>Docs</th><th>Chunks</th>
+              <th>Daily limit</th>
             </tr>
           </thead>
           <tbody>
@@ -95,6 +96,21 @@
                 <td>{{ t.avgLatencyMs.toFixed(0) }}ms</td>
                 <td>{{ t.userCount }}</td>
                 <td>{{ t.documentCount }}</td>
+                <td>{{ t.chunkCount | number }}</td>
+                <td class="limit-cell">
+                  @if (editLimit()?.id === tenantId(t.tenantId)) {
+                    <input class="limit-input" type="number" min="0"
+                      [value]="editLimit()!.value"
+                      (input)="editLimit.update(s => s ? { ...s, value: +$any($event.target).value } : s)">
+                    <button class="btn-save" (click)="saveLimit()" title="Save">✓</button>
+                    <button class="btn-cancel" (click)="editLimit.set(null)" title="Cancel">✕</button>
+                  } @else {
+                    <span class="limit-value" [class.unlimited]="tenantLimit(t.tenantId) === 0">
+                      {{ tenantLimit(t.tenantId) === 0 ? '∞' : (tenantLimit(t.tenantId) / 1000).toFixed(0) + 'k' }}
+                    </span>
+                    <button class="btn-edit-limit" (click)="startEditLimit(tenantId(t.tenantId))" title="Edit limit">✎</button>
+                  }
+                </td>
               </tr>
             }
           </tbody>
@@ -109,6 +125,9 @@
           <input placeholder="Owner email" type="email" [value]="newOwnerEmail()" (input)="newOwnerEmail.set($any($event.target).value)" required>
           <input placeholder="Owner password" type="password" [value]="newOwnerPassword()" (input)="newOwnerPassword.set($any($event.target).value)" required>
           <input placeholder="Owner display name (optional)" [value]="newOwnerDisplayName()" (input)="newOwnerDisplayName.set($any($event.target).value)">
+          <input placeholder="Daily token limit (0 = unlimited)" type="number" min="0"
+            [value]="newDailyTokenLimit()"
+            (input)="newDailyTokenLimit.set(+$any($event.target).value)">
           <button type="submit" class="btn-primary">Create</button>
         </form>
         @if (createError())   { <p class="error-msg">{{ createError() }}</p> }

@@ -1,12 +1,7 @@
 <div class="chat-container">
   <div class="chat-toolbar">
-    @if (auth.isLoggedIn()) {
-      <label class="agent-toggle private-toggle">
-        <input type="checkbox"
-               [checked]="usePrivate()"
-               (change)="usePrivate.set($any($event.target).checked)">
-        Private docs
-      </label>
+    @if (sessionId()) {
+      <span class="session-badge">{{ sessionId()!.slice(0, 8) }}…</span>
     }
     @if (messages().length > 0) {
       <button class="btn-clear" (click)="clearHistory()">Clear</button>
@@ -16,7 +11,13 @@
   <div class="messages" #scrollContainer>
     @if (messages().length === 0) {
       <div class="empty-state">
-        <p>Upload a document above, then ask a question.</p>
+        <p>
+          @if (sessionId()) {
+            Ask a question about your documents in this chat.
+          } @else {
+            Select or create a chat from the sidebar, then ask a question.
+          }
+        </p>
       </div>
     }
 
@@ -53,6 +54,16 @@
                 <span class="meta-tag model">{{ formatModel(msg.model) }}</span>
               }
               <span class="meta-tag cost">${{ msg.costUsd.toFixed(4) }}</span>
+              <button
+                class="btn-feedback"
+                [class.active]="msg.feedback === 1"
+                (click)="sendFeedback($index, 1)"
+                title="Good answer">👍</button>
+              <button
+                class="btn-feedback"
+                [class.active]="msg.feedback === -1"
+                (click)="sendFeedback($index, -1)"
+                title="Bad answer">👎</button>
             </div>
           }
         </div>
