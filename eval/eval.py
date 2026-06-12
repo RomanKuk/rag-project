@@ -237,7 +237,12 @@ def run_tenant_isolation_test() -> bool:
         return True
 
     print("\n[Tenant isolation test] Uploading sentinel document as tenant A...")
-    sentinel_content = b"SENTINEL_TENANT_A: The secret code is XYZZY_42."
+    sentinel_content = (
+        b"SENTINEL_TENANT_A: The secret code is XYZZY_42. "
+        b"This document belongs exclusively to Tenant A and must never be visible to any other tenant. "
+        b"It contains a unique identifier used for cross-tenant isolation testing. "
+        b"If another tenant retrieves this document, a data isolation failure has occurred."
+    )
     files = {"file": ("sentinel.txt", sentinel_content, "text/plain")}
     headers_a = {"X-API-Key": API_KEY_A}
     try:

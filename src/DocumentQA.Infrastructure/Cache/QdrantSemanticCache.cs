@@ -1,6 +1,7 @@
 using DocumentQA.Application.Abstractions.Cache;
 using DocumentQA.Application.Models;
 using DocumentQA.Application.Options;
+using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Qdrant.Client;
@@ -42,13 +43,23 @@ public sealed class QdrantSemanticCache : ISemanticCache
             }
         };
 
-        var hits = await _client.SearchAsync(
-            Collection,
-            queryEmbedding,
-            filter: filter,
-            limit: 1,
-            scoreThreshold: (float)_opts.SimilarityThreshold,
-            cancellationToken: ct);
+        IReadOnlyList<ScoredPoint> hits;
+        try
+        {
+            hits = await _client.SearchAsync(
+                Collection,
+                queryEmbedding,
+                filter: filter,
+                limit: 1,
+                scoreThreshold: (float)_opts.SimilarityThreshold,
+                cancellationToken: ct);
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+        {
+            // Collection was deleted externally (e.g. eval script); recreate on next call.
+            _collectionReady = false;
+            return null;
+        }
 
         if (hits.Count == 0) return null;
 
