@@ -115,8 +115,12 @@ public sealed class QdrantVectorStore : IVectorStore
         {
             try
             {
-                var baseConditions = ScopeConditions(scope);
-                baseConditions.Add(new Condition
+                // Wrap ScopeFilter (which correctly handles chat OR shared branches)
+                // inside a Must so the keyword condition is ANDed with the full scope.
+                // Using ScopeConditions here would skip the Chat case entirely.
+                var filter = new Filter();
+                filter.Must.Add(new Condition { Filter = ScopeFilter(scope) });
+                filter.Must.Add(new Condition
                 {
                     Field = new FieldCondition
                     {
@@ -124,8 +128,6 @@ public sealed class QdrantVectorStore : IVectorStore
                         Match = new Match { Text = kw }
                     }
                 });
-                var filter = new Filter();
-                foreach (var c in baseConditions) filter.Must.Add(c);
 
                 var kwResults = await _client.SearchAsync(
                     CollectionName, dense, filter: filter,
@@ -301,6 +303,15 @@ public sealed class QdrantVectorStore : IVectorStore
             conditions.Add(new Condition
             {
                 Field = new FieldCondition { Key = "owner_user_id", Match = new Match { Keyword = scope.UserId } }
+            });
+        }
+        else if (scope.Mode == ScopeMode.Chat && scope.ChatId.HasValue)
+        {
+            // Delete/list operations on chat-scoped documents must target that chat only —
+            // never bleed into shared docs even if IncludeSharedDocs is true on retrieval.
+            conditions.Add(new Condition
+            {
+                Field = new FieldCondition { Key = "chat_id", Match = new Match { Keyword = scope.ChatId.Value.ToString() } }
             });
         }
 

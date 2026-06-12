@@ -1,109 +1,169 @@
 <div class="chat-container">
+
+  <!-- Toolbar -->
   <div class="chat-toolbar">
-    @if (sessionId()) {
-      <span class="session-badge">{{ sessionId()!.slice(0, 8) }}…</span>
-      <button class="btn-docs" (click)="toggleDocs()">
-        Documents ({{ docs().length }})
-      </button>
-    }
+    <mat-slide-toggle
+      [checked]="includeShared()"
+      (change)="toggleIncludeShared($event.checked)"
+      matTooltip="When on, shared tenant documents are also searched"
+      color="primary">
+      Shared docs
+    </mat-slide-toggle>
+
+    <button mat-stroked-button (click)="toggleDocs()" color="primary">
+      <mat-icon>description</mat-icon>
+      Documents ({{ docs().length }})
+    </button>
+
     @if (messages().length > 0) {
-      <button class="btn-clear" (click)="clearHistory()">Clear</button>
+      <button mat-button (click)="clearHistory()" class="btn-clear">
+        <mat-icon>clear_all</mat-icon>
+        Clear
+      </button>
     }
   </div>
 
-  @if (showDocs() && sessionId()) {
+  <!-- Docs panel -->
+  @if (showDocs()) {
     <div class="docs-panel">
       <div class="docs-header">
         <span>Documents in this chat</span>
         <label class="btn-upload" [class.disabled]="docUploading()">
-          {{ docUploading() ? 'Uploading…' : '+ Add' }}
+          @if (docUploading()) {
+            <mat-spinner diameter="16"></mat-spinner>
+          } @else {
+            <mat-icon>upload_file</mat-icon>
+          }
+          {{ docUploading() ? 'Uploading…' : 'Add file' }}
           <input type="file" accept=".pdf,.docx,.txt" (change)="onDocSelected($event)" [disabled]="docUploading()" hidden>
         </label>
       </div>
-      @if (docError()) {
-        <p class="docs-error">{{ docError() }}</p>
-      }
       @if (docs().length === 0 && !docUploading()) {
-        <p class="docs-empty">No documents attached — answers use tenant-shared documents only.</p>
+        <p class="docs-empty">No documents attached — {{ includeShared() ? 'shared tenant documents will be searched.' : 'no documents will be searched.' }}</p>
       }
       @for (doc of docs(); track doc) {
         <div class="doc-row">
+          <mat-icon class="doc-icon">insert_drive_file</mat-icon>
           <span class="doc-name">{{ doc }}</span>
-          <button class="btn-doc-delete" (click)="deleteDoc(doc)" title="Remove">✕</button>
+          <button mat-icon-button color="warn" (click)="deleteDoc(doc)" matTooltip="Remove from chat">
+            <mat-icon>close</mat-icon>
+          </button>
         </div>
       }
     </div>
   }
 
-  <div class="messages" #scrollContainer>
+  <!-- Messages -->
+  <div class="messages" #scrollContainer (click)="onMessagesClick($event)">
+
     @if (historyLoading()) {
       <div class="empty-state">
-        <span class="tool-spinner"></span>
+        <mat-spinner diameter="36"></mat-spinner>
         <p>Loading conversation…</p>
       </div>
     } @else if (messages().length === 0) {
       <div class="empty-state">
-        <p>
+        <div class="empty-icon-wrap">
+          <mat-icon>auto_awesome</mat-icon>
+        </div>
+        <p class="empty-title">How can I help you today?</p>
+        <p class="empty-sub">
           @if (sessionId()) {
-            Ask a question about your documents in this chat.
+            Ask a question about your documents.
           } @else {
-            Select or create a chat from the sidebar, then ask a question.
+            Send a message to start a new chat, or add a document first.
           }
         </p>
       </div>
     }
 
     @for (msg of messages(); track $index) {
-      <div class="message" [class]="msg.role">
-        <div class="bubble">
+      <div class="message" [class.user]="msg.role === 'user'" [class.assistant]="msg.role === 'assistant'">
+
+        <!-- Avatar -->
+        <div class="avatar" [class.avatar-user]="msg.role === 'user'" [class.avatar-ai]="msg.role === 'assistant'">
+          @if (msg.role === 'user') {
+            <mat-icon>person</mat-icon>
+          } @else {
+            <mat-icon>auto_awesome</mat-icon>
+          }
+        </div>
+
+        <!-- Content -->
+        <div class="msg-body">
+
           @if (msg.activeToolCall) {
             <div class="tool-activity">
-              <span class="tool-spinner"></span>
+              <span class="tool-dot"></span>
+              <span class="tool-dot"></span>
+              <span class="tool-dot"></span>
               {{ msg.activeToolCall }}
             </div>
           }
+
           @if (msg.role === 'assistant') {
             <div class="content markdown" [innerHTML]="msg.content | markdown"></div>
-            @if (msg.isStreaming && !msg.activeToolCall) {
-              <span class="cursor">▋</span>
+            @if (msg.isStreaming && !msg.activeToolCall && !msg.content) {
+              <div class="thinking-dots">
+                <span></span><span></span><span></span>
+              </div>
+            }
+            @if (msg.isStreaming && msg.content) {
+              <span class="stream-cursor"></span>
             }
           } @else {
-            <div class="content">{{ msg.content }}</div>
+            <div class="content user-content">{{ msg.content }}</div>
           }
+
+          <!-- Sources -->
           @if (msg.sources && msg.sources.length > 0) {
             <div class="sources">
-              <span class="sources-label">Sources:</span>
               @for (src of msg.sources; track (src.documentName ?? '') + src.page) {
-                <span class="source-tag">
-                  {{ src.documentName || 'unknown' }}@if (src.page > 0) {&nbsp;p.{{ src.page }}}
+                <span class="source-chip">
+                  <mat-icon>article</mat-icon>
+                  {{ src.documentName || 'unknown' }}@if (src.page > 0) {&nbsp;&middot;&nbsp;p.{{ src.page }}}
                 </span>
               }
             </div>
           }
+
+          <!-- Meta row -->
           @if (!msg.isStreaming && msg.role === 'assistant' && msg.costUsd !== undefined) {
             <div class="msg-meta">
               @if (msg.cacheHit) {
-                <span class="meta-tag cache">cached</span>
+                <span class="meta-pill cache">
+                  <mat-icon>bolt</mat-icon> cached
+                </span>
               }
-              <span class="meta-tag agent">agent</span>
               @if (msg.model) {
-                <span class="meta-tag model">{{ formatModel(msg.model) }}</span>
+                <span class="meta-pill model">{{ formatModel(msg.model) }}</span>
               }
-              <span class="meta-tag cost">${{ msg.costUsd.toFixed(4) }}</span>
+              <span class="meta-pill cost">${{ msg.costUsd.toFixed(4) }}</span>
+
+              <div class="meta-spacer"></div>
+
               <button
+                mat-icon-button
                 class="btn-feedback"
                 [class.active]="msg.feedback === 1"
                 [disabled]="msg.feedbackSent"
                 (click)="sendFeedback($index, 1)"
-                title="Good answer">👍</button>
+                matTooltip="Good answer">
+                <mat-icon>thumb_up</mat-icon>
+              </button>
               <button
+                mat-icon-button
                 class="btn-feedback"
                 [class.active]="msg.feedback === -1"
                 [disabled]="msg.feedbackSent"
                 (click)="sendFeedback($index, -1)"
-                title="Bad answer">👎</button>
+                matTooltip="Bad answer">
+                <mat-icon>thumb_down</mat-icon>
+              </button>
               @if (msg.feedbackSent) {
-                <span class="feedback-thanks">Thanks!</span>
+                <span class="feedback-thanks">
+                  <mat-icon>check_circle</mat-icon> Thanks!
+                </span>
               }
             </div>
           }
@@ -112,19 +172,33 @@
     }
   </div>
 
-  <div class="input-area">
-    <textarea
-      [value]="question()"
-      (input)="question.set($any($event.target).value)"
-      (keydown)="onKeyDown($event)"
-      placeholder="Ask a question about your documents..."
-      rows="2"
-      [disabled]="isLoading() || historyLoading()">
-    </textarea>
-    <button
-      (click)="sendMessage()"
-      [disabled]="isLoading() || historyLoading() || !question().trim()">
-      {{ isLoading() ? '...' : 'Send' }}
-    </button>
+  <!-- Input area -->
+  <div class="input-wrap">
+    <div class="input-box" [class.focused]="inputFocused()" [class.disabled]="isLoading() || historyLoading()">
+      <textarea
+        #promptInput
+        (input)="autoGrow($event)"
+        (focus)="inputFocused.set(true)"
+        (blur)="inputFocused.set(false)"
+        (keydown)="onKeyDown($event)"
+        [value]="question()"
+        placeholder="Message… (↑↓ to recall previous)"
+        rows="1"
+        [disabled]="isLoading() || historyLoading()">
+      </textarea>
+      <button
+        class="send-btn"
+        (click)="sendMessage()"
+        [disabled]="isLoading() || historyLoading() || !question().trim()"
+        matTooltip="Send (Enter)">
+        @if (isLoading()) {
+          <mat-spinner diameter="20" color="accent"></mat-spinner>
+        } @else {
+          <mat-icon>arrow_upward</mat-icon>
+        }
+      </button>
+    </div>
+    <p class="input-hint">Enter to send &middot; Shift+Enter for new line</p>
   </div>
+
 </div>

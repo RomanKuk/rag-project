@@ -89,10 +89,10 @@ public static class ChatSessionEndpoints
             });
         });
 
-        // ── Rename session ─────────────────────────────────────────────────────
+        // ── Update session (title and/or includeSharedDocs) ───────────────────────
         group.MapPatch("{id:guid}", async (
             Guid id,
-            RenameSessionRequest req,
+            UpdateSessionRequest req,
             IChatSessionRepository repo,
             ICurrentUser user,
             CancellationToken ct) =>
@@ -101,10 +101,13 @@ public static class ChatSessionEndpoints
             if (session is null || session.UserId != user.UserId || session.TenantId != user.TenantSlug)
                 return Results.NotFound();
 
-            session.Title     = req.Title;
+            if (req.Title is not null)
+                session.Title = req.Title;
+            if (req.IncludeSharedDocs.HasValue)
+                session.IncludeSharedDocs = req.IncludeSharedDocs.Value;
             session.UpdatedAt = DateTime.UtcNow;
             await repo.UpdateAsync(session, ct);
-            return Results.Ok(new { id = session.Id, title = session.Title });
+            return Results.Ok(new { id = session.Id, title = session.Title, includeSharedDocs = session.IncludeSharedDocs });
         });
 
         // ── Delete session ─────────────────────────────────────────────────────
@@ -197,4 +200,4 @@ public static class ChatSessionEndpoints
 }
 
 public sealed record CreateSessionRequest(string? Title, bool IncludeSharedDocs = true);
-public sealed record RenameSessionRequest(string Title);
+public sealed record UpdateSessionRequest(string? Title, bool? IncludeSharedDocs);

@@ -3,6 +3,7 @@ using DocumentQA.Application.Abstractions.Retrieval;
 using DocumentQA.Application.Abstractions.Usage;
 using DocumentQA.Application.UseCases.Admin;
 using DocumentQA.Domain.Identity;
+using Microsoft.Extensions.Configuration;
 
 namespace DocumentQA.Api.Endpoints;
 
@@ -15,11 +16,14 @@ public static class AdminEndpoints
         group.MapPost("/tenants", async (
             CreateTenantRequest req,
             CreateTenantHandler handler,
+            IConfiguration config,
             CancellationToken ct) =>
         {
             try
             {
-                var result = await handler.HandleAsync(req, ct);
+                var defaultLimit = config.GetValue<int>("Tenants:DefaultDailyTokenLimit", 100_000);
+                var effective = req with { DailyTokenLimit = req.DailyTokenLimit > 0 ? req.DailyTokenLimit : defaultLimit };
+                var result = await handler.HandleAsync(effective, ct);
                 return Results.Ok(result);
             }
             catch (InvalidOperationException ex)

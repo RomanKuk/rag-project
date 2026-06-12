@@ -78,11 +78,17 @@ export class ChatSessionService {
     );
   }
 
-  async rename(id: string, title: string): Promise<void> {
-    await firstValueFrom(
-      this.http.patch(`${this.apiUrl}/api/chats/${id}`, { title }, { headers: this.headers() })
+  async updateSession(id: string, patch: { title?: string; includeSharedDocs?: boolean }): Promise<void> {
+    const result = await firstValueFrom(
+      this.http.patch<{ id: string; title: string; includeSharedDocs: boolean }>(
+        `${this.apiUrl}/api/chats/${id}`, patch, { headers: this.headers() }
+      )
     );
-    this.sessions.update(list => list.map(s => s.id === id ? { ...s, title } : s));
+    this.sessions.update(list => list.map(s => s.id === id ? { ...s, ...result } : s));
+  }
+
+  async rename(id: string, title: string): Promise<void> {
+    return this.updateSession(id, { title });
   }
 
   async delete(id: string): Promise<void> {
