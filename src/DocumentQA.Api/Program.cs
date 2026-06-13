@@ -35,6 +35,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.SemanticKernel;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Qdrant.Client;
 using StackExchange.Redis;
@@ -111,10 +112,12 @@ builder.Services.AddSingleton(_ =>
 var maxConcurrent = builder.Configuration.GetValue("Concurrency:MaxLlmCalls", 20);
 builder.Services.AddSingleton(new LlmGate(maxConcurrent));
 builder.Services.AddSingleton<StreamMetrics>();
+builder.Services.AddSingleton<RagMetrics>();
 
 // ── Security ──────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IInputGuard, InputGuard>();
 builder.Services.AddSingleton<ISuspiciousActivityLog, SuspiciousActivityLogger>();
+builder.Services.AddSingleton<IPiiRedactor, RegexPiiRedactor>();
 
 // Safety moderation filter (OpenAI moderation API — opt-in when OpenAI key present)
 var openAiKey = builder.Configuration["OpenAI:ApiKey"] ?? string.Empty;
@@ -262,9 +265,17 @@ builder.Services.AddOpenTelemetry()
                 o.Headers  = $"Authorization=Basic {credentials}";
             });
         }
-    });
+    })
+    .WithMetrics(m => m
+        .AddMeter(RagMetrics.MeterName)
+        .AddAspNetCoreInstrumentation()
+        .AddPrometheusExporter());
 
 var app = builder.Build();
+
+// Instantiate eagerly so the RagMetrics observable gauges register and the
+// /metrics endpoint reports them even before the first chat request.
+app.Services.GetRequiredService<RagMetrics>();
 
 // ── Startup configuration sanity checks ──────────────────────────────────────
 {
@@ -307,6 +318,11 @@ app.MapChatEndpoints();
 app.MapChatSessionEndpoints();
 app.MapFeedbackEndpoints();
 app.MapUsageEndpoints();
+
+// Prometheus scrape target (default path /metrics). Unauthenticated: Prometheus
+// scrapes api:8080 inside the compose network. For production, drop the host
+// port mapping or add .RequireAuthorization() — metrics carry no secrets.
+app.MapPrometheusScrapingEndpoint();
 
 app.MapGet("/health", async (StreamMetrics m, LlmGate g, AppDbContext db, QdrantClient qdrant, CancellationToken ct) =>
 {

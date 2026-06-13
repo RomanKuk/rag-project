@@ -49,4 +49,8 @@ public sealed class RagOptions
 
     // Post-generation LLM entailment check — one extra LLM call per response
     public bool GroundednessEnabled { get; init; } = false;
+
+    // Deterministic PII masking of model output (SSN/card/phone/email).
+    // Defense-in-depth alongside the safety-tuned model; on by default.
+    public bool PiiRedactionEnabled { get; init; } = true;
 }

@@ -9,7 +9,9 @@ public sealed class InputGuard : IInputGuard
 
     private static readonly (Regex Pattern, string Label)[] InjectionPatterns =
     [
-        (new Regex(@"ignore\s+(previous|all)\s+instructions", RegexOptions.IgnoreCase | RegexOptions.Compiled), "ignore-instructions"),
+        // Matches "ignore instructions" with any stack of qualifiers in between,
+        // e.g. "ignore all previous instructions", "disregard the prior prompts".
+        (new Regex(@"(ignore|disregard|forget)\s+((all|the|any|your|my|prior|previous|earlier|above|preceding)\s+)*(instructions?|prompts?|rules?|directions?)", RegexOptions.IgnoreCase | RegexOptions.Compiled), "ignore-instructions"),
         (new Regex(@"system\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled), "system-role-injection"),
         (new Regex(@"<\|im_start\|>", RegexOptions.Compiled), "im_start-token"),
         (new Regex(@"<\|im_end\|>", RegexOptions.Compiled), "im_end-token"),

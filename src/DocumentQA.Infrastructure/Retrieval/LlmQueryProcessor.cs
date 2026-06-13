@@ -50,8 +50,11 @@ public sealed class LlmQueryProcessor(
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
+            // Fall back to the raw query when the LLM omits search_text OR returns
+            // an empty/whitespace string — embedding "" makes the OpenAI API 400.
             var searchText = root.TryGetProperty("search_text", out var st)
-                ? st.GetString() ?? rawQuery
+                             && !string.IsNullOrWhiteSpace(st.GetString())
+                ? st.GetString()!
                 : rawQuery;
 
             var intent = root.TryGetProperty("intent", out var intentEl)

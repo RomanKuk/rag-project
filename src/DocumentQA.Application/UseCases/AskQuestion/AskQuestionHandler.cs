@@ -35,6 +35,7 @@ public sealed class AskQuestionHandler
     private readonly IAnswerGuardrail _citationGuardrail;
     private readonly IGroundednessCheck _groundednessCheck;
     private readonly ISafetyFilter _safetyFilter;
+    private readonly IPiiRedactor _piiRedactor;
     private readonly ITokenCounter _tokenCounter;
     private readonly RagOptions _options;
     private readonly ILogger<AskQuestionHandler> _logger;
@@ -51,6 +52,7 @@ public sealed class AskQuestionHandler
         IAnswerGuardrail citationGuardrail,
         IGroundednessCheck groundednessCheck,
         ISafetyFilter safetyFilter,
+        IPiiRedactor piiRedactor,
         ITokenCounter tokenCounter,
         IOptions<RagOptions> options,
         ILogger<AskQuestionHandler> logger)
@@ -66,10 +68,16 @@ public sealed class AskQuestionHandler
         _citationGuardrail  = citationGuardrail;
         _groundednessCheck  = groundednessCheck;
         _safetyFilter       = safetyFilter;
+        _piiRedactor        = piiRedactor;
         _tokenCounter       = tokenCounter;
         _options            = options.Value;
         _logger             = logger;
     }
+
+    // Chars held back from the live stream so a PII pattern that straddles token
+    // boundaries (e.g. "123" + "-45-" + "6789") is fully assembled before flush.
+    // Must exceed the longest maskable pattern; emails set the practical ceiling.
+    private const int PiiTailKeep = 80;
 
     public async IAsyncEnumerable<AskQuestionChunk> HandleAsync(
         string question,
@@ -104,6 +112,10 @@ public sealed class AskQuestionHandler
 
         if (cached is not null)
         {
+            // Redact on the way out too — protects any legacy cache entries that
+            // were stored before redaction was enabled.
+            if (_options.PiiRedactionEnabled)
+                cached = _piiRedactor.Redact(cached);
             foreach (var token in SplitIntoTokens(cached))
                 yield return AskQuestionChunk.OfToken(token);
             yield return AskQuestionChunk.Done(new UsageSummary(
@@ -160,6 +172,9 @@ public sealed class AskQuestionHandler
         var accumulated = new StringBuilder();
         var usedModel = modelFallbackChain[0];
         var fallbackUsed = false;
+        var redact = _options.PiiRedactionEnabled;
+        // Holds the trailing chars not yet safe to flush (PII straddle guard).
+        var pending = new StringBuilder();
 
         using (var llmActivity = RagActivitySource.Source.StartActivity("llm-completion"))
         {
@@ -171,6 +186,7 @@ public sealed class AskQuestionHandler
             foreach (var model in modelFallbackChain)
             {
                 var failed = false;
+                pending.Clear();
                 var enumerator = _chat.StreamAsync(prompt, model, ct).GetAsyncEnumerator(ct);
                 await using (enumerator)
                 {
@@ -191,13 +207,41 @@ public sealed class AskQuestionHandler
                         if (!hasMore) break;
 
                         var token = enumerator.Current;
-                        accumulated.Append(token);
-                        yield return AskQuestionChunk.OfToken(token);
+                        if (!redact)
+                        {
+                            accumulated.Append(token);
+                            yield return AskQuestionChunk.OfToken(token);
+                            continue;
+                        }
+
+                        // Redact the whole buffer, then flush everything except the
+                        // last PiiTailKeep chars so a still-forming pattern stays in.
+                        pending.Append(token);
+                        if (pending.Length > PiiTailKeep)
+                        {
+                            var masked = _piiRedactor.Redact(pending.ToString());
+                            var flushLen = masked.Length - PiiTailKeep;
+                            if (flushLen > 0)
+                            {
+                                var toFlush = masked[..flushLen];
+                                pending.Clear();
+                                pending.Append(masked[flushLen..]);
+                                accumulated.Append(toFlush);
+                                yield return AskQuestionChunk.OfToken(toFlush);
+                            }
+                        }
                     }
                 }
 
                 if (!failed)
                 {
+                    // Flush the retained tail through a final redaction pass.
+                    if (redact && pending.Length > 0)
+                    {
+                        var masked = _piiRedactor.Redact(pending.ToString());
+                        accumulated.Append(masked);
+                        yield return AskQuestionChunk.OfToken(masked);
+                    }
                     usedModel = model;
                     fallbackUsed = model != modelFallbackChain[0];
                     break;

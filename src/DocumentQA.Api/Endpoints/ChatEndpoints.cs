@@ -38,6 +38,7 @@ public static class ChatEndpoints
             IServiceScopeFactory scopeFactory,
             LlmGate gate,
             StreamMetrics metrics,
+            RagMetrics ragMetrics,
             ILoggerFactory loggerFactory,
             HttpContext ctx) =>
         {
@@ -127,6 +128,7 @@ public static class ChatEndpoints
                 var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 logger.LogWarning("Blocked request from {IP}: {Reason}", ip, validation.Reason);
                 await suspiciousLog.LogRequestAsync(req.Question, validation.Reason!, ip);
+                ragMetrics.RecordGuardBlock();
                 ctx.Response.StatusCode = 400;
                 await ctx.Response.WriteAsJsonAsync(new { error = "Invalid input.", reason = validation.Reason });
                 return;
@@ -222,6 +224,14 @@ public static class ChatEndpoints
                             usage.InputTokens, usage.OutputTokens, cost,
                             latencyMs, ttftMs, usage.CacheHit, usage.FallbackUsed,
                             UserId: userId);
+
+                        // Prometheus: synchronous in-memory record (NOT in the
+                        // background persistence scope, which lacks guard context).
+                        ragMetrics.RecordRequest(
+                            scope.TenantId, usage.Model, usage.CacheHit,
+                            usage.InputTokens, usage.OutputTokens, cost,
+                            latencyMs / 1000.0,
+                            ttftMs.HasValue ? ttftMs.Value / 1000.0 : null);
 
                         var sourcesJson = cachedSources is { Count: > 0 }
                             ? JsonSerializer.Serialize(cachedSources, JsonOpts)
