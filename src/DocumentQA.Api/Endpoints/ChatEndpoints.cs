@@ -25,6 +25,7 @@ public static class ChatEndpoints
             [FromBody] ChatRequest req,
             AskQuestionHandler handler,
             IAgentOrchestrator orchestrator,
+            IModeRouter modeRouter,
             IInputGuard guard,
             ISuspiciousActivityLog suspiciousLog,
             ITokenRateLimiter rateLimiter,
@@ -187,7 +188,8 @@ public static class ChatEndpoints
                 // Model routing: pick cheap vs strong model based on query complexity
                 var routedModels = modelRouter.Route(req.Question, tier.Models);
 
-                var chunks = req.Agent
+                var useAgent = req.Agent ?? modeRouter.ShouldUseAgent(req.Question);
+                var chunks = useAgent
                     ? orchestrator.OrchestrateAsync(req.Question, routedModels, scope, history, ctx.RequestAborted)
                     : handler.HandleAsync(req.Question, routedModels, scope, ctx.RequestAborted);
 
@@ -212,6 +214,7 @@ public static class ChatEndpoints
                             cache_hit     = usage.CacheHit,
                             fallback_used = usage.FallbackUsed,
                             sources       = cachedSources ?? Array.Empty<Domain.Retrieval.Citation>(),
+                            mode          = useAgent ? "agent" : "rag",
                         };
                         await ctx.Response.WriteAsync(
                             $"data: {JsonSerializer.Serialize(doneEvent, JsonOpts)}\n\n",
@@ -316,7 +319,7 @@ public static class ChatEndpoints
 
 public sealed record ChatRequest(
     string Question,
-    bool   Agent     = false,
+    bool?  Agent     = null,
     Guid?  SessionId = null,
     IReadOnlyList<HistoryEntry>? History = null
 );

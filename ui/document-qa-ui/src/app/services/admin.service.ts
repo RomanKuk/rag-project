@@ -45,6 +45,46 @@ export interface TenantSummary {
   createdAt: string;
 }
 
+export interface SystemMetrics {
+  activeStreams: number | null;
+  guardBlocks24h: number | null;
+  p95LatencyMs: number | null;
+  p95TtftMs: number | null;
+  requestsPerMinute: number | null;
+  cost24h: number | null;
+  totalChunks: number | null;
+  prometheusAvailable: boolean;
+  qdrantAvailable: boolean;
+}
+
+export interface EvalRun {
+  id: number;
+  runAt: string;
+  passed: boolean;
+  mode: string;
+  results: {
+    scores?: { faithfulness?: number; answer_relevancy?: number; context_recall?: number };
+    retrieval_coverage?: number;
+    toxicity?: string;
+    tool_selection?: boolean;
+    tenant_isolation?: boolean;
+    safety?: { name: string; passed: boolean; detail: string }[];
+    refusal_recall?: number;
+    refusal_precision?: number;
+  };
+}
+
+export interface ModelMetrics {
+  model: string;
+  requests: number;
+  tokens: number;
+  costUsd: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number | null;
+  cacheHitRate: number;
+  fallbackRate: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class AdminService {
   constructor(private readonly http: HttpClient) {}
@@ -75,5 +115,17 @@ export class AdminService {
 
   updateTenant(id: string, patch: { dailyTokenLimit?: number; isActive?: boolean }): Observable<TenantSummary> {
     return this.http.patch<TenantSummary>(`${environment.apiUrl}/api/admin/tenants/${id}`, patch);
+  }
+
+  getSystemMetrics(): Observable<SystemMetrics> {
+    return this.http.get<SystemMetrics>(`${environment.apiUrl}/api/admin/metrics/system`);
+  }
+
+  getModelBreakdown(): Observable<ModelMetrics[]> {
+    return this.http.get<ModelMetrics[]>(`${environment.apiUrl}/api/admin/metrics/models`);
+  }
+
+  getEvalRuns(limit = 5): Observable<EvalRun[]> {
+    return this.http.get<EvalRun[]>(`${environment.apiUrl}/api/admin/eval-results?limit=${limit}`);
   }
 }

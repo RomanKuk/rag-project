@@ -135,6 +135,11 @@
                   <mat-icon>bolt</mat-icon> cached
                 </span>
               }
+              @if (msg.mode) {
+                <span class="meta-pill mode" [class.mode-agent]="msg.mode === 'agent'" [class.mode-rag]="msg.mode === 'rag'">
+                  {{ msg.mode === 'agent' ? 'agent' : 'rag' }}
+                </span>
+              }
               @if (msg.model) {
                 <span class="meta-pill model">{{ formatModel(msg.model) }}</span>
               }

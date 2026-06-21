@@ -6,6 +6,7 @@ export interface ChatMessage {
   costUsd?: number;
   cacheHit?: boolean;
   model?: string;
+  mode?: 'agent' | 'rag';
   activeToolCall?: string;
   feedback?: 1 | -1;     // user thumbs up/down
   feedbackSent?: boolean; // true once the rating was persisted

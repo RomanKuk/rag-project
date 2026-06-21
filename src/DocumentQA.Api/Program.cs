@@ -229,6 +229,7 @@ builder.Services.AddScoped<IChatCompletionPort, OpenAIChatAdapter>();
 builder.Services.AddScoped<IAnswerGuardrail, CitationPresenceGuardrail>();
 builder.Services.AddScoped<IGroundednessCheck, LlmGroundednessCheck>();
 builder.Services.AddSingleton<IModelRouter, ComplexityModelRouter>();
+builder.Services.AddSingleton<IModeRouter, HeuristicModeRouter>();
 builder.Services.AddSingleton<ITokenCounter, SharpTokenCounter>();
 
 // ── Cache ─────────────────────────────────────────────────────────────────────

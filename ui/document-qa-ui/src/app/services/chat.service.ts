@@ -15,6 +15,7 @@ interface ServerChunk {
   fallback_used?: boolean;
   usage?: { input_tokens: number; output_tokens: number; model: string };
   toolCall?: { tool: string; status: 'running' | 'done' };
+  mode?: 'agent' | 'rag';
 }
 
 export interface StreamEvent {
@@ -26,6 +27,7 @@ export interface StreamEvent {
   cache_hit?: boolean;
   usage?: { input_tokens: number; output_tokens: number; model: string };
   toolCall?: { tool: string; status: 'running' | 'done' };
+  mode?: 'agent' | 'rag';
 }
 
 /** Thrown when /api/chat rejects the request before streaming (401, 429, ...). */
@@ -58,7 +60,7 @@ export class ChatService {
 
   async *streamAnswer(
     question: string,
-    options: { agent?: boolean; sessionId?: string; history?: HistoryEntry[] } = {}
+    options: { sessionId?: string; history?: HistoryEntry[] } = {}
   ): AsyncGenerator<StreamEvent> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
@@ -70,7 +72,6 @@ export class ChatService {
       headers,
       body: JSON.stringify({
         question,
-        agent:     options.agent     ?? true,
         sessionId: options.sessionId ?? null,
         history:   options.history   ?? [],
       }),

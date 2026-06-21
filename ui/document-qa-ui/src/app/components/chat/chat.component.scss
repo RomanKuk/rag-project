@@ -462,9 +462,11 @@
 
   mat-icon { font-size: 11px; height: 11px; width: 11px; }
 
-  &.cache { background: #e8f5e9; color: #2e7d32; }
-  &.model { background: #fce4ec; color: #880e4f; }
-  &.cost  { background: #fff8e1; color: #6d4c00; }
+  &.cache      { background: #e8f5e9; color: #2e7d32; }
+  &.model      { background: #fce4ec; color: #880e4f; }
+  &.cost       { background: #fff8e1; color: #6d4c00; }
+  &.mode-rag   { background: #e3f2fd; color: #0d47a1; }
+  &.mode-agent { background: #ede7f6; color: #4527a0; }
 }
 
 .btn-feedback {

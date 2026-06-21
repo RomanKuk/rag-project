@@ -1,26 +1,40 @@
 import { Component, OnInit, signal, inject, DestroyRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DecimalPipe } from '@angular/common';
+import { DatePipe, DecimalPipe } from '@angular/common';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { BaseChartDirective } from 'ng2-charts';
 import { Chart, ChartConfiguration, registerables } from 'chart.js';
-import { AdminService, DailyBucket, OverallMetrics, TenantMetrics, TenantSummary } from '../../services/admin.service';
+import { AdminService, DailyBucket, EvalRun, ModelMetrics, OverallMetrics, SystemMetrics, TenantMetrics, TenantSummary } from '../../services/admin.service';
 import { AuthService } from '../../services/auth.service';
+import { environment } from '../../../environments/environment';
 
 Chart.register(...registerables);
 
 @Component({
   selector: 'app-admin-dashboard',
   standalone: true,
-  imports: [FormsModule, BaseChartDirective, DecimalPipe],
+  imports: [FormsModule, BaseChartDirective, DecimalPipe, DatePipe],
   templateUrl: './admin-dashboard.component.html',
   styleUrl: './admin-dashboard.component.scss',
 })
 export class AdminDashboardComponent implements OnInit {
-  metrics   = signal<OverallMetrics | null>(null);
-  tenants   = signal<TenantSummary[]>([]);
-  loading   = signal(true);
-  error     = signal('');
+  metrics        = signal<OverallMetrics | null>(null);
+  systemMetrics  = signal<SystemMetrics | null>(null);
+  modelBreakdown = signal<ModelMetrics[]>([]);
+  evalRuns       = signal<EvalRun[]>([]);
+  tenants        = signal<TenantSummary[]>([]);
+  loading        = signal(true);
+  error          = signal('');
+
+  readonly grafanaUrl = environment.grafanaUrl;
+
+  private readonly sanitizer = inject(DomSanitizer);
+
+  grafanaPanelUrl(panelId: number): SafeResourceUrl {
+    const base = `${this.grafanaUrl}/d-solo/documentqa-rag/documentqa-rag?orgId=1&theme=dark&from=now-1h&to=now&refresh=15s`;
+    return this.sanitizer.bypassSecurityTrustResourceUrl(`${base}&panelId=${panelId}`);
+  }
 
   // Tenant create form
   newTenantName        = signal('');
@@ -76,6 +90,18 @@ export class AdminDashboardComponent implements OnInit {
         this.adminSvc.getTenants().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(t => this.tenants.set(t));
       },
       error: () => { this.error.set('Failed to load metrics.'); this.loading.set(false); },
+    });
+    this.adminSvc.getSystemMetrics().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: s => this.systemMetrics.set(s),
+      error: () => {},
+    });
+    this.adminSvc.getModelBreakdown().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: b => this.modelBreakdown.set(b),
+      error: () => {},
+    });
+    this.adminSvc.getEvalRuns().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: e => this.evalRuns.set(e),
+      error: () => {},
     });
   }
 

@@ -240,7 +240,6 @@ export class ChatComponent implements OnInit {
 
     try {
       for await (const event of this.chatService.streamAnswer(q, {
-        agent:     true,
         sessionId: sid ?? undefined,
         history,
       })) {
@@ -267,6 +266,7 @@ export class ChatComponent implements OnInit {
             cacheHit:  event.cache_hit,
             model:     event.usage?.model,
             messageId: event.message_id,
+            mode:      event.mode,
           });
         }
       }

@@ -12,6 +12,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<ChatSession> ChatSessions { get; set; } = null!;
     public DbSet<ChatMessage> ChatMessages { get; set; } = null!;
     public DbSet<Feedback>    Feedbacks    { get; set; } = null!;
+    public DbSet<EvalResult>  EvalResults  { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -70,6 +71,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(f => f.TenantId).HasMaxLength(100).IsRequired();
             e.HasIndex(f => f.TenantId);
             e.HasIndex(f => f.CreatedAt);
+        });
+
+        mb.Entity<EvalResult>(e =>
+        {
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => r.RunAt);
         });
     }
 }

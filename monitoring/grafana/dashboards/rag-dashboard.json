@@ -11,6 +11,7 @@
   "templating": { "list": [] },
   "panels": [
     {
+      "id": 1,
       "type": "timeseries",
       "title": "Request rate (req/s) by tenant",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -20,6 +21,7 @@
       ]
     },
     {
+      "id": 2,
       "type": "stat",
       "title": "Active SSE streams",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -27,6 +29,7 @@
       "targets": [ { "expr": "sum(rag_active_streams)", "refId": "A" } ]
     },
     {
+      "id": 3,
       "type": "stat",
       "title": "Guard blocks (last 1h)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -34,6 +37,7 @@
       "targets": [ { "expr": "sum(increase(rag_guard_blocks_total[1h]))", "refId": "A" } ]
     },
     {
+      "id": 4,
       "type": "timeseries",
       "title": "Request latency (seconds)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -45,6 +49,7 @@
       ]
     },
     {
+      "id": 5,
       "type": "timeseries",
       "title": "Time to first token p95 (seconds)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -55,6 +60,7 @@
       ]
     },
     {
+      "id": 6,
       "type": "timeseries",
       "title": "Tokens/min by tenant & direction",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -64,6 +70,7 @@
       ]
     },
     {
+      "id": 7,
       "type": "gauge",
       "title": "Cache hit ratio (15m)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -74,6 +81,7 @@
       ]
     },
     {
+      "id": 8,
       "type": "stat",
       "title": "Estimated cost (last 24h, USD)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -82,6 +90,7 @@
       "targets": [ { "expr": "sum(increase(rag_cost_usd_total[24h]))", "refId": "A" } ]
     },
     {
+      "id": 9,
       "type": "timeseries",
       "title": "HTTP 5xx error rate",
       "description": "Uses ASP.NET Core instrumentation. If empty, confirm the exact metric name on /metrics (varies by OTel version).",

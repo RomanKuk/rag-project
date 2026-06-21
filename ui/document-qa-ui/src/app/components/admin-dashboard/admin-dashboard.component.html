@@ -74,6 +74,53 @@
         </div>
       </section>
 
+      <!-- System health -->
+      <section class="system-section">
+        <div class="section-header">
+          <h2>System health</h2>
+          <a [href]="grafanaUrl" target="_blank" rel="noopener" class="btn-grafana">
+            Open Grafana ↗
+          </a>
+        </div>
+
+        @if (systemMetrics() && !systemMetrics()!.prometheusAvailable && !systemMetrics()!.qdrantAvailable) {
+          <p class="system-unavailable">Prometheus and Qdrant are unreachable — metrics unavailable.</p>
+        } @else {
+          <div class="system-cards">
+            <div class="sys-card">
+              <span class="sys-label">Active streams</span>
+              <span class="sys-value">{{ systemMetrics()?.activeStreams ?? '—' }}</span>
+              @if (!systemMetrics()?.prometheusAvailable) { <span class="sys-na">Prometheus offline</span> }
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">Req / min (5m avg)</span>
+              <span class="sys-value">{{ systemMetrics()?.requestsPerMinute?.toFixed(2) ?? '—' }}</span>
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">P95 latency</span>
+              <span class="sys-value">{{ systemMetrics()?.p95LatencyMs != null ? systemMetrics()!.p95LatencyMs!.toFixed(0) + ' ms' : '—' }}</span>
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">P95 TTFT</span>
+              <span class="sys-value">{{ systemMetrics()?.p95TtftMs != null ? systemMetrics()!.p95TtftMs!.toFixed(0) + ' ms' : '—' }}</span>
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">Guard blocks (24 h)</span>
+              <span class="sys-value">{{ systemMetrics()?.guardBlocks24h ?? '—' }}</span>
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">Cost (24 h)</span>
+              <span class="sys-value">{{ systemMetrics()?.cost24h != null ? '$' + systemMetrics()!.cost24h!.toFixed(4) : '—' }}</span>
+            </div>
+            <div class="sys-card">
+              <span class="sys-label">Total chunks (Qdrant)</span>
+              <span class="sys-value">{{ systemMetrics()?.totalChunks != null ? (systemMetrics()!.totalChunks! | number) : '—' }}</span>
+              @if (!systemMetrics()?.qdrantAvailable) { <span class="sys-na">Qdrant offline</span> }
+            </div>
+          </div>
+        }
+      </section>
+
       <!-- Per-tenant table -->
       <section class="table-section">
         <h2>Per-tenant breakdown</h2>
@@ -116,6 +163,127 @@
           </tbody>
         </table>
       </section>
+
+      <!-- Grafana panels -->
+      @if (grafanaUrl) {
+        <section class="grafana-section">
+          <div class="section-header">
+            <h2>Live metrics (Grafana)</h2>
+            <a [href]="grafanaUrl + '/d/documentqa-rag'" target="_blank" rel="noopener" class="btn-grafana">
+              Full dashboard ↗
+            </a>
+          </div>
+          <div class="grafana-grid">
+            <div class="grafana-panel tall">
+              <span class="panel-label">Request rate by tenant</span>
+              <iframe [src]="grafanaPanelUrl(1)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel tall">
+              <span class="panel-label">Request latency P50 / P95</span>
+              <iframe [src]="grafanaPanelUrl(4)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel tall">
+              <span class="panel-label">Time to first token P95</span>
+              <iframe [src]="grafanaPanelUrl(5)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel tall">
+              <span class="panel-label">Tokens / min</span>
+              <iframe [src]="grafanaPanelUrl(6)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+          </div>
+          <div class="grafana-grid grafana-grid--stats">
+            <div class="grafana-panel short">
+              <span class="panel-label">Active streams</span>
+              <iframe [src]="grafanaPanelUrl(2)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel short">
+              <span class="panel-label">Guard blocks (1h)</span>
+              <iframe [src]="grafanaPanelUrl(3)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel short">
+              <span class="panel-label">Cache hit ratio</span>
+              <iframe [src]="grafanaPanelUrl(7)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+            <div class="grafana-panel short">
+              <span class="panel-label">Cost (24h)</span>
+              <iframe [src]="grafanaPanelUrl(8)" frameborder="0" allowtransparency="true"></iframe>
+            </div>
+          </div>
+        </section>
+      }
+
+      <!-- Model breakdown -->
+      @if (modelBreakdown().length > 0) {
+        <section class="table-section">
+          <h2>Model breakdown</h2>
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Model</th><th>Requests</th><th>Tokens</th><th>Cost (USD)</th>
+                <th>Avg latency</th><th>P95 latency</th><th>Cache hit</th><th>Fallback rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (m of modelBreakdown(); track m.model) {
+                <tr>
+                  <td class="model-name">{{ m.model }}</td>
+                  <td>{{ m.requests | number }}</td>
+                  <td>{{ (m.tokens / 1000).toFixed(1) }}k</td>
+                  <td>${{ m.costUsd.toFixed(4) }}</td>
+                  <td>{{ m.avgLatencyMs.toFixed(0) }}ms</td>
+                  <td>{{ m.p95LatencyMs != null ? m.p95LatencyMs.toFixed(0) + 'ms' : '—' }}</td>
+                  <td>{{ (m.cacheHitRate * 100).toFixed(1) }}%</td>
+                  <td>{{ (m.fallbackRate * 100).toFixed(1) }}%</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </section>
+      }
+
+      <!-- Evaluation results -->
+      @if (evalRuns().length > 0) {
+        <section class="table-section">
+          <h2>Evaluation runs</h2>
+          @for (run of evalRuns(); track run.id) {
+            <div class="eval-run" [class.eval-pass]="run.passed" [class.eval-fail]="!run.passed">
+              <div class="eval-run-header">
+                <span class="eval-badge" [class.pass]="run.passed" [class.fail]="!run.passed">
+                  {{ run.passed ? 'PASS' : 'FAIL' }}
+                </span>
+                <span class="eval-meta">{{ run.mode }} &middot; {{ run.runAt | date:'yyyy-MM-dd HH:mm' }} UTC</span>
+              </div>
+              <div class="eval-scores">
+                @if (run.results.scores) {
+                  <span class="eval-score">Faithfulness <strong>{{ (run.results.scores.faithfulness ?? 0) | number:'1.2-2' }}</strong></span>
+                  <span class="eval-score">Relevancy <strong>{{ (run.results.scores.answer_relevancy ?? 0) | number:'1.2-2' }}</strong></span>
+                  <span class="eval-score">Context recall <strong>{{ (run.results.scores.context_recall ?? 0) | number:'1.2-2' }}</strong></span>
+                }
+                @if (run.results.retrieval_coverage != null) {
+                  <span class="eval-score">Coverage <strong>{{ (run.results.retrieval_coverage! * 100).toFixed(0) }}%</strong></span>
+                }
+                @if (run.results.refusal_recall != null) {
+                  <span class="eval-score">Refusal recall <strong>{{ (run.results.refusal_recall! * 100).toFixed(0) }}%</strong></span>
+                }
+              </div>
+              @if (run.results.safety && run.results.safety.length > 0) {
+                <div class="eval-safety">
+                  @for (s of run.results.safety; track s.name) {
+                    <span class="safety-chip" [class.ok]="s.passed" [class.ko]="!s.passed">
+                      {{ s.passed ? '✓' : '✗' }} {{ s.name }}
+                    </span>
+                  }
+                  @if (run.results.tenant_isolation != null) {
+                    <span class="safety-chip" [class.ok]="run.results.tenant_isolation" [class.ko]="!run.results.tenant_isolation">
+                      {{ run.results.tenant_isolation ? '✓' : '✗' }} Tenant isolation
+                    </span>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </section>
+      }
 
       <!-- Create tenant -->
       <section class="create-section">

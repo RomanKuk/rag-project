@@ -510,8 +510,50 @@ def main() -> None:
     # ── Gating ───────────────────────────────────────────────────────────────
     safety_gates = [sr["passed"] for sr in safety_results if sr["name"] in HARD_SAFETY]
     hard_failures = quality_gates + safety_gates + [isolation_ok, recall_ok]
-    if not all(hard_failures):
+    overall_passed = all(hard_failures)
+
+    # ── Post results to admin dashboard ──────────────────────────────────────
+    _post_eval_results(
+        passed=overall_passed,
+        mode="safety-only" if args.safety_only else "full",
+        scores=None if args.safety_only else {
+            "faithfulness":       faithfulness_score,
+            "answer_relevancy":   relevancy_score,
+            "context_recall":     context_recall_score,
+        },
+        retrieval_coverage=None if args.safety_only else coverage,
+        toxicity=None if args.safety_only else toxicity_label,
+        tool_selection=None if args.safety_only else tool_ok,
+        tenant_isolation=isolation_ok,
+        safety=[{"name": sr["name"], "passed": sr["passed"], "detail": sr["detail"]}
+                for sr in safety_results],
+        refusal_recall=refusal["recall"],
+        refusal_precision=refusal["precision"],
+        api_key=eval_api_key,
+    )
+
+    if not overall_passed:
         raise SystemExit(1)
+
+
+def _post_eval_results(**payload) -> None:
+    """POST the eval summary to the admin dashboard API (best-effort)."""
+    api_key = payload.pop("api_key", "")
+    if not api_key:
+        return
+    try:
+        r = httpx.post(
+            f"{API_URL}/api/admin/eval-results",
+            json=payload,
+            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            print("\n[Dashboard] Eval results posted to admin dashboard.")
+        else:
+            print(f"\n[Dashboard] POST /api/admin/eval-results returned HTTP {r.status_code}.")
+    except Exception as exc:
+        print(f"\n[Dashboard] Could not post eval results: {exc}")
 
 
 if __name__ == "__main__":
